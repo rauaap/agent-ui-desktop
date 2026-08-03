@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Agent UI — tests</title>
+  <link rel="stylesheet" href="../css/theme.css">
+  <style>
+    body { background: var(--bg); color: var(--ink); font: 14px/1.6 var(--font); margin: 0; padding: 28px; }
+    h1 { font-size: 17px; margin: 0 0 4px; }
+    #summary { margin: 0 0 18px; color: var(--muted); font-variant-numeric: tabular-nums; }
+    #summary.pass { color: var(--running); }
+    #summary.fail { color: var(--danger); }
+    ol { list-style: none; margin: 0; padding: 0; }
+    li { padding: 5px 0; border-bottom: 1px solid var(--line-soft); display: flex; gap: 10px; }
+    .mark { width: 14px; }
+    .ok .mark { color: var(--running); }
+    .bad .mark { color: var(--danger); }
+    .bad .name { color: var(--danger); }
+    .msg { display: block; color: var(--muted); font-family: var(--mono); font-size: 12px; margin-top: 3px; }
+  </style>
+</head>
+<body>
+  <h1>Agent UI — unit tests</h1>
+  <p id="summary">running…</p>
+  <ol id="list"></ol>
+
+  <script type="module">
+    import { results } from './tests.js';
+
+    const list = document.getElementById('list');
+    const summary = document.getElementById('summary');
+    const failed = results.filter((r) => !r.ok);
+
+    for (const result of results) {
+      const li = document.createElement('li');
+      li.className = result.ok ? 'ok' : 'bad';
+      li.innerHTML = `<span class="mark">${result.ok ? '✓' : '✕'}</span>`
+        + `<span class="name">${result.name}</span>`;
+      if (!result.ok) {
+        const msg = document.createElement('span');
+        msg.className = 'msg';
+        msg.textContent = result.message;
+        li.querySelector('.name').appendChild(msg);
+      }
+      list.appendChild(li);
+    }
+
+    summary.textContent = `${results.length - failed.length} / ${results.length} passing`;
+    summary.className = failed.length ? 'fail' : 'pass';
+  </script>
+</body>
+</html>

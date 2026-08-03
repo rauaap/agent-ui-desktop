@@ -1,0 +1,457 @@
+/**
+ * Session state and the transcript reducer. **No DOM in this file.**
+ *
+ * This is the part of the client that is actually load-bearing logic rather
+ * than presentation: turning the server's flat stream of tagged events into a
+ * list of transcript rows, with all the fiddly rules the Android client keeps
+ * tangled up in view code (SessionActivity.handleMessage) —
+ *
+ *   - consecutive `output` chunks coalesce into one agent message
+ *   - an `approval_request` swallows the `tool_use` card it duplicates
+ *   - approvals and questions resolve in place when their response arrives
+ *   - anything that isn't `output` closes the open agent message
+ *
+ * Keeping it DOM-free means it can be exercised headlessly (see test/), and it
+ * gives the renderer a single job: mirror rows into elements.
+ */
+
+import { toolSummary } from './tools.js';
+
+/**
+ * Live transcript cap. The server replays at most 200 rows on connect
+ * (SCROLLBACK_REPLAY_LIMIT in main.py), so only a long-running live session can
+ * grow past this; older rows are dropped from the top.
+ */
+export const MAX_ROWS = 400;
+
+const BUSY = new Set(['running', 'awaiting_approval']);
+export const isBusy = (status) => BUSY.has(status);
+
+function blankState(id) {
+  return {
+    id,
+    name: '',
+    workingDir: '',
+    agent: 'claude-code',
+    status: 'idle',
+    autoApproveWrite: false,
+    autoApproveCommand: false,
+    connected: false,
+    rows: [],
+    nextKey: 1,
+    // The agent message currently accepting chunks, or null.
+    openBubble: null,
+    // The most recent tool_use row, still eligible to be replaced by a matching
+    // approval_request. Cleared by anything that ends the tool's moment.
+    lastTool: null,
+    pendingApprovalId: null,
+    pendingQuestionId: null,
+  };
+}
+
+export class Store {
+  constructor() {
+    /** @type {Map<string, object>} */
+    this.states = new Map();
+    /** @type {Map<string, Set<Function>>} */
+    this.listeners = new Map();
+    /** Shadow states used while buffering a reconnect's replay. */
+    this.replays = new Map();
+  }
+
+  /** The live state for a session, created empty on first use. */
+  session(id) {
+    let state = this.states.get(id);
+    if (!state) {
+      state = blankState(id);
+      this.states.set(id, state);
+    }
+    return state;
+  }
+
+  has(id) {
+    return this.states.has(id);
+  }
+
+  forget(id) {
+    this.states.delete(id);
+    this.replays.delete(id);
+    this.listeners.delete(id);
+  }
+
+  subscribe(id, fn) {
+    let set = this.listeners.get(id);
+    if (!set) {
+      set = new Set();
+      this.listeners.set(id, set);
+    }
+    set.add(fn);
+    return () => set.delete(fn);
+  }
+
+  emit(id, changes) {
+    if (!changes.length) return;
+    const set = this.listeners.get(id);
+    if (!set) return;
+    for (const fn of set) fn(changes, this.session(id));
+  }
+
+  /** Merge server-supplied session metadata (from REST) into the state. */
+  setMeta(id, meta) {
+    const state = this.session(id);
+    Object.assign(state, meta);
+    this.emit(id, [{ op: 'meta' }]);
+  }
+
+  setConnected(id, connected) {
+    const state = this.session(id);
+    if (state.connected === connected) return;
+    state.connected = connected;
+    this.emit(id, [{ op: 'meta' }]);
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* replay buffering                                                 */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * Start buffering into a shadow state. Used on *re*connect only: the first
+   * connection renders its replay progressively because there is nothing on
+   * screen worth preserving, but a reconnect must not blank a transcript the
+   * user is reading while a slow replay trickles in.
+   */
+  beginReplay(id) {
+    const live = this.session(id);
+    const shadow = blankState(id);
+    // Carry metadata across so the shadow's own `settings`/`renamed` events
+    // apply on top of what we already know.
+    Object.assign(shadow, {
+      name: live.name,
+      workingDir: live.workingDir,
+      agent: live.agent,
+      status: live.status,
+      autoApproveWrite: live.autoApproveWrite,
+      autoApproveCommand: live.autoApproveCommand,
+      nextKey: live.nextKey,
+    });
+    this.replays.set(id, shadow);
+  }
+
+  isReplaying(id) {
+    return this.replays.has(id);
+  }
+
+  /** Swap a completed replay in for the visible transcript, in one shot. */
+  commitReplay(id) {
+    const shadow = this.replays.get(id);
+    if (!shadow) return;
+    // `connected` is the one field set outside the event stream — the socket
+    // opened while this replay was being assembled — so read it at commit time.
+    // Snapshotting it in beginReplay would swap the live `true` back to the
+    // `false` from the moment the connection dropped, leaving a reconnected
+    // session displayed as offline forever.
+    shadow.connected = this.session(id).connected;
+    this.replays.delete(id);
+    this.states.set(id, shadow);
+    this.emit(id, [{ op: 'reset' }]);
+  }
+
+  /** Drop a partial replay — the socket died before it finished. */
+  abortReplay(id) {
+    this.replays.delete(id);
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* the reducer                                                      */
+  /* ---------------------------------------------------------------- */
+
+  /** Apply one server event, notifying subscribers of what changed. */
+  apply(id, event) {
+    const replaying = this.replays.get(id);
+    const state = replaying ?? this.session(id);
+    const changes = reduce(state, event);
+    // A buffered replay is invisible until it commits, so nothing to emit.
+    if (!replaying) this.emit(id, changes);
+  }
+}
+
+function newRow(state, row) {
+  row.key = state.nextKey++;
+  return row;
+}
+
+function append(state, row, changes) {
+  newRow(state, row);
+  state.rows.push(row);
+  changes.push({ op: 'append', row });
+  // Trim from the front once past the cap, so a very long session cannot grow
+  // the transcript without bound.
+  while (state.rows.length > MAX_ROWS) {
+    const dropped = state.rows.shift();
+    if (state.openBubble === dropped) state.openBubble = null;
+    if (state.lastTool === dropped) state.lastTool = null;
+    changes.push({ op: 'remove', row: dropped });
+  }
+  return row;
+}
+
+function findRow(state, predicate) {
+  for (let i = state.rows.length - 1; i >= 0; i--) {
+    if (predicate(state.rows[i])) return state.rows[i];
+  }
+  return null;
+}
+
+/**
+ * The reducer proper: mutate `state` for one event and return the list of
+ * changes a view needs to apply. Exported for tests.
+ */
+export function reduce(state, event) {
+  const changes = [];
+  const type = event?.type;
+
+  switch (type) {
+    case 'status': {
+      state.status = event.status || 'idle';
+      // Leaving a blocked state without an explicit response (a stop, or the
+      // process dying) strands the pending cards; close them out so they don't
+      // sit there offering buttons that no longer do anything.
+      if (state.status !== 'awaiting_approval') {
+        if (state.pendingApprovalId) {
+          resolveApproval(state, state.pendingApprovalId, null, null, changes);
+        }
+        if (state.pendingQuestionId) {
+          resolveQuestion(state, state.pendingQuestionId, null, changes);
+        }
+      }
+      changes.push({ op: 'meta' });
+      break;
+    }
+
+    case 'settings':
+      if (typeof event.auto_approve_write === 'boolean') {
+        state.autoApproveWrite = event.auto_approve_write;
+      }
+      if (typeof event.auto_approve_command === 'boolean') {
+        state.autoApproveCommand = event.auto_approve_command;
+      }
+      changes.push({ op: 'meta' });
+      break;
+
+    case 'renamed':
+      if (event.name) state.name = event.name;
+      changes.push({ op: 'meta' });
+      break;
+
+    case 'input':
+      state.openBubble = null;
+      state.lastTool = null;
+      append(state, { kind: 'user', text: event.text ?? '' }, changes);
+      break;
+
+    case 'output': {
+      state.lastTool = null;
+      const text = event.text ?? '';
+      if (state.openBubble) {
+        state.openBubble.text += text;
+        changes.push({ op: 'update', row: state.openBubble });
+      } else {
+        state.openBubble = append(state, { kind: 'agent', text }, changes);
+      }
+      break;
+    }
+
+    case 'tool_use':
+      state.openBubble = null;
+      state.lastTool = append(state, {
+        kind: 'tool',
+        tool: event.tool || 'tool',
+        input: event.input ?? {},
+      }, changes);
+      break;
+
+    case 'approval_request': {
+      state.openBubble = null;
+      const tool = event.tool || 'tool';
+      const input = event.input ?? {};
+      // This approval is for the tool_use we just rendered: drop that row so
+      // the command or edit isn't shown twice — the approval card replaces it.
+      const previous = state.lastTool;
+      if (previous
+          && previous.tool === tool
+          && toolSummary(tool, input) === toolSummary(previous.tool, previous.input)) {
+        const index = state.rows.indexOf(previous);
+        if (index >= 0) {
+          state.rows.splice(index, 1);
+          changes.push({ op: 'remove', row: previous });
+        }
+      }
+      state.lastTool = null;
+
+      const auto = event.auto_approved === true;
+      const row = append(state, {
+        kind: 'approval',
+        id: event.request_id ?? '',
+        tool,
+        input,
+        category: event.category ?? '',
+        auto,
+        options: Array.isArray(event.options) ? event.options : null,
+        // An auto-approved request never blocks, so it is born resolved.
+        resolved: auto ? { behavior: 'allow', auto: true, message: null } : null,
+      }, changes);
+      if (!auto) state.pendingApprovalId = row.id;
+      break;
+    }
+
+    case 'approval_response':
+      resolveApproval(
+        state,
+        event.request_id ?? '',
+        event.behavior ?? null,
+        event.message ?? null,
+        changes,
+        event.auto === true,
+      );
+      break;
+
+    case 'question': {
+      state.openBubble = null;
+      const row = append(state, {
+        kind: 'question',
+        id: event.request_id ?? '',
+        questions: Array.isArray(event.questions) ? event.questions : [],
+        resolved: null,
+      }, changes);
+      state.pendingQuestionId = row.id;
+      break;
+    }
+
+    case 'question_response':
+      resolveQuestion(state, event.request_id ?? '', event.answers ?? null, changes);
+      break;
+
+    case 'done':
+      state.openBubble = null;
+      state.lastTool = null;
+      break;
+
+    case 'error':
+      state.openBubble = null;
+      state.lastTool = null;
+      append(state, { kind: 'error', message: event.message || 'Unknown error' }, changes);
+      break;
+
+    default:
+      break;
+  }
+
+  return changes;
+}
+
+/**
+ * Close out an approval card. A null `behavior` means it stopped being pending
+ * without an answer (the turn ended, the session was stopped) — rendered as a
+ * neutral "no longer pending" rather than a verdict.
+ */
+function resolveApproval(state, requestId, behavior, message, changes, auto = false) {
+  if (state.pendingApprovalId === requestId) state.pendingApprovalId = null;
+  const row = findRow(state, (r) => r.kind === 'approval' && r.id === requestId && !r.resolved);
+  if (!row) return;
+  row.resolved = { behavior, message, auto };
+  changes.push({ op: 'update', row });
+}
+
+function resolveQuestion(state, requestId, answers, changes) {
+  if (state.pendingQuestionId === requestId) state.pendingQuestionId = null;
+  const row = findRow(state, (r) => r.kind === 'question' && r.id === requestId && !r.resolved);
+  if (!row) return;
+  row.resolved = { answers };
+  changes.push({ op: 'update', row });
+}
+
+/* ------------------------------------------------------------------ */
+/* projections over the row model                                     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Flatten a row to searchable text. Search runs over this rather than over the
+ * DOM so it still matches rows the transcript cap has evicted from the page.
+ */
+export function rowText(row) {
+  switch (row.kind) {
+    case 'user':
+    case 'agent':
+      return row.text;
+    case 'tool':
+      return `${row.tool} ${toolSummary(row.tool, row.input)}`;
+    case 'approval':
+      return `${row.tool} ${toolSummary(row.tool, row.input)} ${row.resolved?.message ?? ''}`;
+    case 'question':
+      return row.questions.map((q) => {
+        const options = (q.options || []).map((o) => o.label).join(' ');
+        return `${q.question ?? ''} ${options}`;
+      }).join(' ');
+    case 'error':
+      return row.message;
+    default:
+      return '';
+  }
+}
+
+/** Serialize a session's transcript to markdown, for export. */
+export function toMarkdown(state) {
+  const parts = [`# ${state.name || 'Session'}`, ''];
+  if (state.workingDir) parts.push(`\`${state.workingDir}\` · ${state.agent}`, '');
+
+  for (const row of state.rows) {
+    switch (row.kind) {
+      case 'user':
+        parts.push('### You', '', row.text, '');
+        break;
+      case 'agent':
+        parts.push('### Agent', '', row.text, '');
+        break;
+      case 'tool':
+        parts.push(`**${row.tool}** — \`${toolSummary(row.tool, row.input)}\``, '');
+        parts.push('```json', JSON.stringify(row.input, null, 2), '```', '');
+        break;
+      case 'approval': {
+        const verdict = !row.resolved
+          ? 'pending'
+          : row.resolved.behavior === 'allow'
+            ? (row.resolved.auto ? 'auto-approved' : 'allowed')
+            : row.resolved.behavior === 'deny' ? 'denied' : 'unresolved';
+        parts.push(`**Approval — ${row.tool}** (${verdict})`, '');
+        parts.push('```json', JSON.stringify(row.input, null, 2), '```', '');
+        if (row.resolved?.message) parts.push(`> ${row.resolved.message}`, '');
+        break;
+      }
+      case 'question':
+        for (const q of row.questions) {
+          parts.push(`**Question — ${q.question ?? ''}**`, '');
+          for (const option of q.options || []) parts.push(`- ${option.label}`);
+          parts.push('');
+        }
+        if (row.resolved?.answers) {
+          parts.push(`Answered: ${summarizeAnswers(row.resolved.answers)}`, '');
+        }
+        break;
+      case 'error':
+        parts.push(`> **Error:** ${row.message}`, '');
+        break;
+      default:
+        break;
+    }
+  }
+  return parts.join('\n');
+}
+
+/** Flatten an answers object to a human summary, e.g. "Rocket" or "A / B". */
+export function summarizeAnswers(answers) {
+  if (!answers || typeof answers !== 'object') return '';
+  return Object.values(answers)
+    .map((value) => (Array.isArray(value) ? value.join(', ') : String(value)))
+    .filter(Boolean)
+    .join(' / ');
+}

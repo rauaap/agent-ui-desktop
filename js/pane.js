@@ -1,0 +1,194 @@
+/**
+ * One open session: header, transcript, composer.
+ *
+ * The pane owns the socket for its session — opening a tab is what starts
+ * watching a session, and closing it is what stops. That replaces the Android
+ * client's per-session bell opt-in with something visible in the UI by
+ * construction.
+ */
+
+import { isBusy, toMarkdown } from './store.js';
+import { SessionSocket } from './socket.js';
+import { TranscriptView } from './render/transcript.js';
+
+const el = (tag, className, text) => {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+};
+
+const STATUS_LABEL = {
+  idle: 'Idle',
+  running: 'Running',
+  awaiting_approval: 'Needs you',
+};
+
+export class SessionPane {
+  /**
+   * @param {string} sessionId
+   * @param {import('./store.js').Store} store
+   * @param {{onSettings: Function, onError: Function}} handlers
+   */
+  constructor(sessionId, store, handlers) {
+    this.id = sessionId;
+    this.store = store;
+    this.handlers = handlers;
+
+    this.socket = new SessionSocket(sessionId, store, (event) => {
+      handlers.onLiveEvent?.(sessionId, event);
+    });
+
+    this.root = el('div', 'pane');
+    this.root.appendChild(this.buildHead());
+
+    this.transcript = new TranscriptView(sessionId, store, {
+      onApproval: (requestId, optionId, behavior, message) => {
+        if (!this.socket.sendApproval(requestId, behavior, optionId, message)) {
+          handlers.onError('Not connected — the answer was not sent');
+        }
+      },
+      onAnswers: (requestId, answers) => {
+        if (!this.socket.sendAnswers(requestId, answers)) {
+          handlers.onError('Not connected — the answer was not sent');
+        }
+      },
+    });
+    this.root.appendChild(this.transcript.wrap);
+    this.root.appendChild(this.buildComposer());
+
+    this.unsubscribe = store.subscribe(sessionId, (changes) => {
+      if (changes.some((c) => c.op === 'meta' || c.op === 'reset')) this.refresh();
+    });
+
+    this.refresh();
+    this.socket.open();
+  }
+
+  buildHead() {
+    const head = el('div', 'pane-head');
+
+    const titles = el('div', 'titles');
+    this.nameView = el('div', 'pane-name');
+    this.dirView = el('div', 'pane-dir');
+    titles.append(this.nameView, this.dirView);
+    head.appendChild(titles);
+
+    this.searchBox = el('input', 'search-box');
+    this.searchBox.type = 'search';
+    this.searchBox.placeholder = 'Search transcript';
+    this.searchCount = el('span', 'search-count');
+    this.searchBox.addEventListener('input', () => {
+      const { rows, occurrences } = this.transcript.search(this.searchBox.value);
+      if (!this.searchBox.value.trim()) this.searchCount.textContent = '';
+      else if (!occurrences) this.searchCount.textContent = 'none';
+      else this.searchCount.textContent = `${occurrences} in ${rows}`;
+    });
+    head.append(this.searchBox, this.searchCount);
+
+    this.statusPill = el('span', 'pill');
+    head.appendChild(this.statusPill);
+
+    this.stopButton = el('button', 'icon-btn danger');
+    this.stopButton.textContent = '■';
+    this.stopButton.title = 'Stop the running turn';
+    this.stopButton.addEventListener('click', () => this.handlers.onStop(this.id));
+    head.appendChild(this.stopButton);
+
+    const exportButton = el('button', 'icon-btn', '⭳');
+    exportButton.title = 'Export the transcript as markdown';
+    exportButton.addEventListener('click', () => this.exportMarkdown());
+    head.appendChild(exportButton);
+
+    const settings = el('button', 'icon-btn', '⚙');
+    settings.title = 'Session settings';
+    settings.addEventListener('click', () => this.handlers.onSettings(this.id));
+    head.appendChild(settings);
+
+    return head;
+  }
+
+  buildComposer() {
+    const composer = el('div', 'composer');
+
+    this.input = el('textarea');
+    this.input.rows = 1;
+    this.input.placeholder = 'Send a prompt…';
+    this.input.addEventListener('input', () => this.autoGrow());
+    this.input.addEventListener('keydown', (event) => {
+      // Enter sends, Shift+Enter inserts a newline. This is the input's submit
+      // gesture, not a shortcut layer.
+      if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        this.send();
+      }
+    });
+
+    this.sendButton = el('button', 'btn primary send', 'Send');
+    this.sendButton.addEventListener('click', () => this.send());
+
+    composer.append(this.input, this.sendButton);
+    return composer;
+  }
+
+  autoGrow() {
+    this.input.style.height = 'auto';
+    this.input.style.height = `${Math.min(this.input.scrollHeight, 190)}px`;
+  }
+
+  send() {
+    const text = this.input.value.trim();
+    if (!text) return;
+    const state = this.store.session(this.id);
+    if (isBusy(state.status)) return;
+    if (!this.socket.sendInput(text)) {
+      this.handlers.onError('Not connected — the prompt was not sent');
+      return;
+    }
+    this.input.value = '';
+    this.autoGrow();
+  }
+
+  /** Reflect metadata, status and connectivity into the header and composer. */
+  refresh() {
+    const state = this.store.session(this.id);
+    this.nameView.textContent = state.name || '';
+    this.dirView.textContent = state.workingDir || '';
+
+    const offline = !state.connected;
+    this.statusPill.className = `pill ${offline ? 'offline' : state.status}`;
+    this.statusPill.textContent = offline
+      ? 'Reconnecting…'
+      : STATUS_LABEL[state.status] || state.status;
+
+    const busy = isBusy(state.status);
+    this.input.disabled = busy || offline;
+    this.sendButton.disabled = busy || offline;
+    this.input.placeholder = state.status === 'awaiting_approval'
+      ? 'Answer above to continue…'
+      : busy ? 'The agent is working…' : 'Send a prompt…';
+    this.stopButton.style.display = busy ? '' : 'none';
+  }
+
+  exportMarkdown() {
+    const state = this.store.session(this.id);
+    const blob = new Blob([toMarkdown(state)], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${(state.name || 'session').replace(/[^\w.-]+/g, '-')}.md`;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  focusComposer() {
+    if (!this.input.disabled) this.input.focus();
+  }
+
+  destroy() {
+    this.unsubscribe();
+    this.socket.close();
+    this.transcript.destroy();
+    this.root.remove();
+  }
+}

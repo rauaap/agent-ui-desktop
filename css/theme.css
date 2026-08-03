@@ -1,0 +1,52 @@
+/*
+ * Palette, ported from the Android client's Theme.java so the two front ends
+ * look like the same product. Kept separate from app.css: this file is the
+ * colour vocabulary, app.css is the layout that spends it.
+ */
+
+:root {
+  /* surfaces */
+  --bg: #100f12;
+  --panel: #1a1820;
+  --panel-2: #221f2a;
+  --panel-hover: #262230;
+  --line: #2c2935;
+  --line-soft: #232029;
+
+  /* text */
+  --ink: #ece8f0;
+  --muted: #9893a6;
+  --faint: #6f6a7d;
+
+  /* accent */
+  --accent: #d97757;
+  --accent-strong: #e0875f;
+  --accent-press: #c25f3f;
+  --accent-soft: rgba(217, 119, 87, 0.14);
+  --accent-line: rgba(217, 119, 87, 0.4);
+
+  /* status */
+  --idle: #8b8696;
+  --running: #4ecf9e;
+  --awaiting: #e8b14c;
+  --danger: #ef6f63;
+  --info: #7ea7e0;
+
+  --danger-soft: rgba(239, 111, 99, 0.13);
+  --danger-line: rgba(239, 111, 99, 0.4);
+
+  /* diff gutter colours, from ToolFormat.java */
+  --diff-add: #6fd39b;
+  --diff-del: var(--danger);
+  --diff-ctx: var(--faint);
+
+  /* metrics */
+  --radius: 10px;
+  --radius-lg: 14px;
+  --sidebar-w: 260px;
+
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, "JetBrains Mono", "DejaVu Sans Mono", Menlo, monospace;
+
+  color-scheme: dark;
+}
