@@ -7,7 +7,7 @@
  * construction.
  */
 
-import { isBusy, toMarkdown } from './store.js';
+import { isBusy, parseComposerInput, toMarkdown } from './store.js';
 import { SessionSocket } from './socket.js';
 import { TranscriptView } from './render/transcript.js';
 
@@ -114,7 +114,10 @@ export class SessionPane {
     this.input = el('textarea');
     this.input.rows = 1;
     this.input.placeholder = 'Send a prompt…';
-    this.input.addEventListener('input', () => this.autoGrow());
+    this.input.addEventListener('input', () => {
+      this.autoGrow();
+      this.paintMode();
+    });
     this.input.addEventListener('keydown', (event) => {
       // Enter sends, Shift+Enter inserts a newline. This is the input's submit
       // gesture, not a shortcut layer.
@@ -136,17 +139,49 @@ export class SessionPane {
     this.input.style.height = `${Math.min(this.input.scrollHeight, 190)}px`;
   }
 
+  /**
+   * Say what pressing Send will do. A `!` line goes to the shell, not to the
+   * agent, and that is worth knowing *before* it is sent — hence the red
+   * border rather than the usual terracotta.
+   */
+  paintMode() {
+    const bash = parseComposerInput(this.input.value)?.kind === 'bash';
+    this.input.classList.toggle('bash', bash);
+    this.sendButton.textContent = bash ? 'Run' : 'Send';
+  }
+
   send() {
-    const text = this.input.value.trim();
-    if (!text) return;
-    const state = this.store.session(this.id);
-    if (isBusy(state.status)) return;
-    if (!this.socket.sendInput(text)) {
-      this.handlers.onError('Not connected — the prompt was not sent');
-      return;
+    const parsed = parseComposerInput(this.input.value);
+    if (!parsed) return;
+
+    if (parsed.kind === 'bash') {
+      // Nothing typed after the `!` yet.
+      if (!parsed.command) return;
+      // Bash never takes the turn lock, so this path ignores session status
+      // entirely: a command runs while the agent works, and neither notices.
+      if (!this.socket.sendBash(parsed.command)) {
+        this.handlers.onError('Not connected — the command was not sent');
+        return;
+      }
+    } else {
+      const state = this.store.session(this.id);
+      if (isBusy(state.status)) {
+        // Rejected, but the text stays put: it is still worth sending once the
+        // turn ends, and it may be what you want to run as a command instead.
+        this.handlers.onError(
+          'The agent is busy — wait for the turn to finish, or prefix with ! to run a shell command',
+        );
+        return;
+      }
+      if (!this.socket.sendInput(parsed.text)) {
+        this.handlers.onError('Not connected — the prompt was not sent');
+        return;
+      }
     }
+
     this.input.value = '';
     this.autoGrow();
+    this.paintMode();
   }
 
   /** Reflect metadata, status and connectivity into the header and composer. */
@@ -162,11 +197,18 @@ export class SessionPane {
       : STATUS_LABEL[state.status] || state.status;
 
     const busy = isBusy(state.status);
-    this.input.disabled = busy || offline;
-    this.sendButton.disabled = busy || offline;
-    this.input.placeholder = state.status === 'awaiting_approval'
-      ? 'Answer above to continue…'
-      : busy ? 'The agent is working…' : 'Send a prompt…';
+    // Only connectivity closes the composer. A busy agent no longer does:
+    // `!` commands bypass the turn entirely, and a prompt sent mid-turn is
+    // turned away in send() with a toast, which says more than a dead box.
+    this.input.disabled = offline;
+    this.sendButton.disabled = offline;
+    this.input.placeholder = offline
+      ? 'Reconnecting…'
+      : state.status === 'awaiting_approval'
+        ? 'Answer above, or ! to run a command…'
+        : busy
+          ? 'The agent is working — ! runs a command…'
+          : 'Send a prompt, or ! to run a command…';
     this.stopButton.style.display = busy ? '' : 'none';
   }
 

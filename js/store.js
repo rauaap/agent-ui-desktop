@@ -9,6 +9,7 @@
  *   - consecutive `output` chunks coalesce into one agent message
  *   - an `approval_request` swallows the `tool_use` card it duplicates
  *   - approvals and questions resolve in place when their response arrives
+ *   - a `bash_output` fills in the card its `bash_input` opened
  *   - anything that isn't `output` closes the open agent message
  *
  * Keeping it DOM-free means it can be exercised headlessly (see test/), and it
@@ -26,6 +27,51 @@ export const MAX_ROWS = 400;
 
 const BUSY = new Set(['running', 'awaiting_approval']);
 export const isBusy = (status) => BUSY.has(status);
+
+/**
+ * Decide what a line of composer text means.
+ *
+ * A leading `!` is the *client's* syntax for bash mode — the server never
+ * inspects prompt text, it only honours a `bash` message — so `\!` is how you
+ * send a prompt that genuinely starts with an exclamation mark. The escape is
+ * positional: first character only, and only in front of a `!`.
+ *
+ * A bare `!` comes back as a bash intent with an empty command, so the composer
+ * can flip to command styling the moment the key is pressed; the caller decides
+ * that there is nothing to run yet.
+ *
+ * @returns {{kind: 'bash', command: string} | {kind: 'input', text: string} | null}
+ */
+export function parseComposerInput(raw) {
+  const text = String(raw ?? '').trim();
+  if (!text) return null;
+  if (text.startsWith('!')) return { kind: 'bash', command: text.slice(1).trim() };
+  if (text.startsWith('\\!')) return { kind: 'input', text: text.slice(1) };
+  return { kind: 'input', text };
+}
+
+/** One-line summary of a finished command: how it ended, how long it took. */
+export function bashStatus(result) {
+  if (!result) return 'running…';
+  const bits = [result.exitCode === null ? 'did not start' : `exit ${result.exitCode}`];
+  if (typeof result.durationMs === 'number') {
+    bits.push(result.durationMs < 1000
+      ? `${result.durationMs} ms`
+      : `${(result.durationMs / 1000).toFixed(1)} s`);
+  }
+  if (result.timedOut) bits.push('timed out');
+  if (result.truncated) bits.push('output truncated');
+  return bits.join(' · ');
+}
+
+/** stdout and stderr as one blob, which is what a copy button should hand over. */
+export function bashOutputText(result) {
+  const out = result?.stdout || '';
+  const err = result?.stderr || '';
+  if (!out) return err;
+  if (!err) return out;
+  return out.endsWith('\n') ? out + err : `${out}\n${err}`;
+}
 
 function blankState(id) {
   return {
@@ -331,6 +377,44 @@ export function reduce(state, event) {
       resolveQuestion(state, event.request_id ?? '', event.answers ?? null, changes);
       break;
 
+    // Bash mode: the echo opens a card, the result fills it in. The two are one
+    // row rather than two because a command runs alongside the agent — its
+    // output can arrive several messages after the command that asked for it.
+    case 'bash_input':
+      state.openBubble = null;
+      state.lastTool = null;
+      append(state, { kind: 'bash', command: event.command ?? '', result: null }, changes);
+      break;
+
+    case 'bash_output': {
+      const command = event.command ?? '';
+      const result = {
+        stdout: event.stdout ?? '',
+        stderr: event.stderr ?? '',
+        exitCode: event.exit_code ?? null,
+        durationMs: typeof event.duration_ms === 'number' ? event.duration_ms : null,
+        timedOut: event.timed_out === true,
+        truncated: event.truncated === true,
+      };
+      const pending = findRow(
+        state,
+        (r) => r.kind === 'bash' && !r.result && r.command === command,
+      );
+      if (pending) {
+        // An update, not an append: a command finishing mid-turn must not split
+        // the agent message that is streaming below its card.
+        pending.result = result;
+        changes.push({ op: 'update', row: pending });
+      } else {
+        // No echo to fill in — a replay that began past it, or a command
+        // another client started before we connected. The card stands alone.
+        state.openBubble = null;
+        state.lastTool = null;
+        append(state, { kind: 'bash', command, result }, changes);
+      }
+      break;
+    }
+
     case 'done':
       state.openBubble = null;
       state.lastTool = null;
@@ -392,6 +476,8 @@ export function rowText(row) {
         const options = (q.options || []).map((o) => o.label).join(' ');
         return `${q.question ?? ''} ${options}`;
       }).join(' ');
+    case 'bash':
+      return `${row.command} ${bashOutputText(row.result)}`;
     case 'error':
       return row.message;
     default:
@@ -437,6 +523,18 @@ export function toMarkdown(state) {
           parts.push(`Answered: ${summarizeAnswers(row.resolved.answers)}`, '');
         }
         break;
+      case 'bash': {
+        // Marked as a shell command rather than as conversation: the agent
+        // never saw any of this.
+        parts.push(`**\`$ ${row.command}\`** — shell command`, '');
+        if (!row.result) {
+          parts.push('_running…_', '');
+          break;
+        }
+        parts.push('```', bashOutputText(row.result) || '(no output)', '```', '');
+        parts.push(`_${bashStatus(row.result)}_`, '');
+        break;
+      }
       case 'error':
         parts.push(`> **Error:** ${row.message}`, '');
         break;

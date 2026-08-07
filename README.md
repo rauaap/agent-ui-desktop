@@ -58,6 +58,9 @@ headers, so this only works if you add them — the supported path is `WEB_ROOT`
 - **Desktop notifications** — one switch in the sidebar covers every open
   session. Fires when a turn completes or an approval blocks, and stays quiet
   for the session you are currently looking at.
+- **Bash mode** — a message starting with `!` runs as a shell command in the
+  session's working directory instead of going to the agent. `\!` sends a prompt
+  that really does start with an exclamation mark.
 - **Search and export** — filter and highlight within a transcript, or export
   the whole session as markdown.
 
@@ -115,6 +118,27 @@ buffered replay.
 The live transcript is capped at 400 rows, dropped from the top, so a very long
 session cannot grow the DOM without bound.
 
+### Bash mode runs beside the agent, not through it
+
+The `!` split is the client's, not the server's: the backend never inspects
+prompt text, it only honours a `bash` message, which is what keeps a prompt that
+legitimately starts with `!` sendable (as `\!`). The composer's border turns red
+while a `!` line is being typed, so what Send is about to do is visible before it
+happens.
+
+Server-side a command **never takes the turn lock** — it runs while the agent is
+working and neither side notices — so the composer is deliberately not gated on
+session status. The consequence is that a normal prompt sent mid-turn has to be
+turned away by the client instead: it raises a toast and keeps your text, rather
+than disabling the box. (Queuing it is the eventual answer; rejecting it is the
+current one.)
+
+The command's echo and its output are one card, filled in when the result
+arrives rather than appended, so a command that finishes mid-stream does not
+split the agent message below it. The card is bordered red and its output sits
+in a plain code block: the agent never saw any of this, and the block is there to
+be copied into a prompt if you decide it should.
+
 ## Tests
 
 The pure modules — the diff, the markdown parser, the reducer — have unit tests
@@ -136,6 +160,7 @@ or open `test/index.html` in a browser, which needs nothing installed at all.
 - **Search and export** are new here.
 - **No keyboard shortcut layer.** The composer sends on Enter (Shift+Enter for a
   newline) because a text input needs a submit gesture; nothing else is bound.
+- **Bash mode** is here only, for now.
 
 ## Notes
 

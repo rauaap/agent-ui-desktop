@@ -35,6 +35,13 @@
   --danger-soft: rgba(239, 111, 99, 0.13);
   --danger-line: rgba(239, 111, 99, 0.4);
 
+  /* bash mode — `!` commands and their output. Its own set of names even though
+     they currently spend the danger red, so restyling the feature is one edit
+     here rather than a hunt through app.css. */
+  --bash: #ef8f81;
+  --bash-line: rgba(239, 111, 99, 0.45);
+  --bash-soft: rgba(239, 111, 99, 0.07);
+
   /* diff gutter colours, from ToolFormat.java */
   --diff-add: #6fd39b;
   --diff-del: var(--danger);

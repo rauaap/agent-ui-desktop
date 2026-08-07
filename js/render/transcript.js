@@ -7,7 +7,7 @@
  * transcript smooth without a virtual DOM.
  */
 
-import { rowText } from '../store.js';
+import { bashOutputText, bashStatus, rowText } from '../store.js';
 import { prettyJson, toolSummary } from '../tools.js';
 import { toHtml } from './markdown.js';
 import { toolBody } from './toolformat.js';
@@ -203,6 +203,7 @@ export class TranscriptView {
       case 'tool': node = this.buildTool(row); break;
       case 'approval': node = this.buildApproval(row); break;
       case 'question': node = this.buildQuestion(row); break;
+      case 'bash': node = this.buildBash(row); break;
       case 'error': node = this.buildError(row); break;
       default: node = el('div', 'row');
     }
@@ -400,6 +401,59 @@ export class TranscriptView {
     });
     for (const button of card.querySelectorAll('button')) button.disabled = true;
     this.handlers.onAnswers(row.id, answers);
+  }
+
+  /**
+   * A `!` command and what it printed. Deliberately unlike every other row: the
+   * agent neither ran this nor ever sees the output, so nothing about it should
+   * read as part of the conversation. The body is a plain code block, so the
+   * whole of it can be selected and pasted into a prompt if you do want the
+   * agent to see it.
+   */
+  buildBash(row) {
+    const card = el('div', 'row bash-card');
+
+    const head = el('div', 'bash-head');
+    head.appendChild(el('span', 'bash-prompt', '$'));
+    head.appendChild(el('span', 'bash-cmd', row.command));
+    card.appendChild(head);
+
+    const result = row.result;
+    const body = el('pre', 'bash-out');
+    if (!result) {
+      body.classList.add('waiting');
+      body.textContent = 'running…';
+    } else if (!result.stdout && !result.stderr) {
+      body.classList.add('waiting');
+      body.textContent = '(no output)';
+    } else {
+      if (result.stdout) body.appendChild(document.createTextNode(result.stdout));
+      if (result.stderr) {
+        // Keep the two streams apart visually while leaving them one block of
+        // selectable text, in the order a terminal would have shown them.
+        if (result.stdout && !result.stdout.endsWith('\n')) {
+          body.appendChild(document.createTextNode('\n'));
+        }
+        body.appendChild(el('span', 'bash-err', result.stderr));
+      }
+    }
+    card.appendChild(body);
+
+    if (result) {
+      const copy = el('button', 'copy', 'Copy');
+      copy.addEventListener('click', async () => {
+        await copyText(bashOutputText(result));
+        copy.textContent = 'Copied';
+        setTimeout(() => { copy.textContent = 'Copy'; }, 1200);
+      });
+      head.appendChild(copy);
+
+      const meta = el('div', 'bash-meta', bashStatus(result));
+      if (result.exitCode !== 0 || result.timedOut) meta.classList.add('bad');
+      card.appendChild(meta);
+    }
+
+    return card;
   }
 
   buildError(row) {

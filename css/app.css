@@ -654,6 +654,76 @@ input, textarea {
 
 .qsubmit { padding: 4px 13px 13px; }
 
+/* bash mode -------------------------------------------------------- */
+
+/* Bordered in red rather than the conversation's terracotta: at a glance, this
+ * is the one kind of row the agent has never seen. */
+.bash-card {
+  border: 1px solid var(--bash-line);
+  background: var(--bash-soft);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.bash-head {
+  position: relative;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--bash-line);
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+
+.bash-prompt { color: var(--bash); }
+
+.bash-cmd {
+  flex: 1;
+  min-width: 0;
+  color: var(--ink);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.bash-head .copy {
+  flex: none;
+  align-self: center;
+  font-size: 11px;
+  color: var(--faint);
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+}
+
+.bash-head .copy:hover { color: var(--bash); }
+
+.bash-out {
+  margin: 0;
+  padding: 10px 12px;
+  max-height: 420px;
+  overflow: auto;
+  background: var(--bg);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.bash-out.waiting { color: var(--faint); font-style: italic; }
+.bash-err { color: var(--danger); }
+
+.bash-meta {
+  padding: 6px 12px;
+  font-size: 11.5px;
+  color: var(--faint);
+  letter-spacing: 0.02em;
+}
+
+.bash-meta.bad { color: var(--danger); }
+
 /* misc rows -------------------------------------------------------- */
 
 .msg-error {
@@ -721,6 +791,14 @@ input, textarea {
 
 .composer textarea:focus { border-color: var(--accent-line); }
 .composer textarea:disabled { opacity: 0.5; }
+
+/* A leading `!` means the line goes to the shell instead of to the agent. The
+ * border says so while it is still being typed. */
+.composer textarea.bash,
+.composer textarea.bash:focus {
+  border-color: var(--bash-line);
+  font-family: var(--mono);
+}
 
 .composer .send {
   height: 42px;

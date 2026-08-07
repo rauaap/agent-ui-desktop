@@ -13,7 +13,7 @@
 
 import { ADD, DELETE, MAX_DIFF_LINES, diff } from '../js/render/diff.js';
 import { toHtml } from '../js/render/markdown.js';
-import { Store, reduce, rowText } from '../js/store.js';
+import { Store, parseComposerInput, reduce, rowText } from '../js/store.js';
 import { toolSummary } from '../js/tools.js';
 
 const results = [];
@@ -348,6 +348,113 @@ test('reducer: rowText covers each row kind for search', () => {
   assertTrue(rowText(s.rows[0]).includes('refactor db'));
   assertTrue(rowText(s.rows[1]).includes('git status'));
   assertTrue(rowText(s.rows[2]).includes('boom'));
+});
+
+/* ------------------------------------------------------------------ */
+/* bash mode                                                          */
+/* ------------------------------------------------------------------ */
+
+test('composer: a leading ! is a command, not a prompt', () => {
+  const parsed = parseComposerInput('!df -h');
+  assertEqual(parsed.kind, 'bash');
+  assertEqual(parsed.command, 'df -h');
+});
+
+test('composer: the ! may be followed by a space', () => {
+  assertEqual(parseComposerInput('  !  ls -la  ').command, 'ls -la');
+});
+
+test('composer: a bare ! is bash mode with nothing to run yet', () => {
+  const parsed = parseComposerInput('!');
+  assertEqual(parsed.kind, 'bash');
+  assertEqual(parsed.command, '');
+});
+
+test('composer: \\! escapes to a prompt that starts with !', () => {
+  const parsed = parseComposerInput('\\!important, read this');
+  assertEqual(parsed.kind, 'input');
+  assertEqual(parsed.text, '!important, read this');
+});
+
+test('composer: the escape is positional, not global', () => {
+  // Only the first character is special, so a backslash anywhere else — and a
+  // `!` anywhere else — travels verbatim.
+  assertEqual(parseComposerInput('grep -r "\\!" .').text, 'grep -r "\\!" .');
+  assertEqual(parseComposerInput('wow! ok').text, 'wow! ok');
+});
+
+test('composer: nothing typed is nothing to send', () => {
+  assertEqual(parseComposerInput('   '), null);
+  assertEqual(parseComposerInput(''), null);
+});
+
+test('reducer: bash_output fills in the card its echo opened', () => {
+  const s = feed(freshState(),
+    { type: 'bash_input', command: 'df -h' },
+    {
+      type: 'bash_output',
+      command: 'df -h',
+      stdout: 'Filesystem\n',
+      stderr: '',
+      exit_code: 0,
+      duration_ms: 41,
+      timed_out: false,
+      truncated: false,
+    });
+  assertEqual(s.rows.length, 1, 'the echo and the result are one card');
+  assertEqual(s.rows[0].kind, 'bash');
+  assertEqual(s.rows[0].command, 'df -h');
+  assertEqual(s.rows[0].result.stdout, 'Filesystem\n');
+  assertEqual(s.rows[0].result.exitCode, 0);
+  assertEqual(s.rows[0].result.durationMs, 41);
+});
+
+test('reducer: a command finishing mid-turn does not split the agent message', () => {
+  // The result updates a card above rather than appending, so the streaming
+  // bubble underneath stays open and keeps coalescing.
+  const s = feed(freshState(),
+    { type: 'bash_input', command: 'sleep 1' },
+    { type: 'output', text: 'Hel' },
+    { type: 'bash_output', command: 'sleep 1', stdout: '', stderr: '', exit_code: 0 },
+    { type: 'output', text: 'lo' });
+  assertEqual(s.rows.length, 2);
+  assertEqual(s.rows[1].text, 'Hello');
+});
+
+test('reducer: an orphan bash_output stands on its own', () => {
+  // Replay can begin past the echo, and another client can have started the
+  // command before this one connected.
+  const s = feed(freshState(),
+    { type: 'bash_output', command: 'whoami', stdout: 'root\n', exit_code: 0 });
+  assertEqual(s.rows.length, 1);
+  assertEqual(s.rows[0].command, 'whoami');
+  assertEqual(s.rows[0].result.stdout, 'root\n');
+});
+
+test('reducer: a second command does not resolve the first one still running', () => {
+  const s = feed(freshState(),
+    { type: 'bash_input', command: 'sleep 30' },
+    { type: 'bash_input', command: 'whoami' },
+    { type: 'bash_output', command: 'whoami', stdout: 'root\n', exit_code: 0 });
+  assertEqual(s.rows.length, 2);
+  assertEqual(s.rows[0].result, null, 'the long-running command is still open');
+  assertEqual(s.rows[1].result.stdout, 'root\n');
+});
+
+test('reducer: a command that never started reports no exit code', () => {
+  const s = feed(freshState(),
+    { type: 'bash_input', command: 'ls' },
+    { type: 'bash_output', command: 'ls', stderr: 'no such directory', exit_code: null });
+  assertEqual(s.rows[0].result.exitCode, null);
+  assertEqual(s.rows[0].result.stdout, '');
+});
+
+test('reducer: bash rows are searchable by command and by output', () => {
+  const s = feed(freshState(),
+    { type: 'bash_input', command: 'git status' },
+    { type: 'bash_output', command: 'git status', stdout: 'nothing to commit', exit_code: 0 });
+  assertTrue(rowText(s.rows[0]).includes('git status'));
+  assertTrue(rowText(s.rows[0]).includes('nothing to commit'));
 });
 
 export { results };

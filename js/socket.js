@@ -104,6 +104,15 @@ export class SessionSocket {
     return this.send({ type: 'input', text });
   }
 
+  /**
+   * Run a shell command in the session's working directory, bypassing the
+   * agent. Never takes the turn lock server-side, so it is deliberately not
+   * gated on session status.
+   */
+  sendBash(command) {
+    return this.send({ type: 'bash', command });
+  }
+
   sendApproval(requestId, behavior, optionId, message) {
     const payload = { type: 'approval_response', request_id: requestId, behavior };
     if (optionId) payload.option_id = optionId;
