@@ -79,6 +79,14 @@ notifier.onActivate = (id) => {
   if (workspace.isOpen(id)) workspace.activate(id);
 };
 
+// Coming back to the browser tab retires the notification for whichever session
+// is on screen; the notifier decides, since it is the same rule that stops one
+// from firing there. `focus` covers returning from another window, where the
+// document stayed visible and `visibilitychange` never fires.
+const dismissNotifications = () => notifier.dismissActive();
+document.addEventListener('visibilitychange', dismissNotifications);
+window.addEventListener('focus', dismissNotifications);
+
 /** Map a server session row onto the store's metadata fields. */
 const metaFrom = (session) => ({
   name: session.name,

@@ -18,12 +18,16 @@ export class Notifier {
     this.previous = new Map();
     /** @type {Set<string>} request ids already announced */
     this.announced = new Set();
+    /** @type {Map<string, Notification>} what is still on screen, by session */
+    this.open = new Map();
     this.activeId = null;
     this.enabled = load();
   }
 
   setActive(id) {
     this.activeId = id;
+    // Arriving at a session is what retires its notification.
+    this.dismissActive();
   }
 
   /** True when the user is looking at this session right now. */
@@ -91,6 +95,12 @@ export class Notifier {
 
     try {
       const notification = new Notification(title, { body, tag: `agent-ui-${sessionId}` });
+      // The tag makes the platform replace the session's earlier notification,
+      // so at most one per session is ever on screen to close.
+      this.open.set(sessionId, notification);
+      notification.addEventListener('close', () => {
+        if (this.open.get(sessionId) === notification) this.open.delete(sessionId);
+      });
       notification.addEventListener('click', () => {
         window.focus();
         this.onActivate?.(sessionId);
@@ -100,6 +110,24 @@ export class Notifier {
       // Some browsers refuse the constructor outside a service worker; a missing
       // notification is not worth breaking the stream over.
     }
+  }
+
+  /**
+   * Retire the notification for the session actually on screen, on the same
+   * rule that keeps one from firing there in the first place. Everything else
+   * stays up: a notification is only spent once the user has looked at what it
+   * was about, so switching browser tabs while parked on some other session
+   * leaves it alone.
+   */
+  dismissActive() {
+    if (this.activeId && this.suppressed(this.activeId)) this.close(this.activeId);
+  }
+
+  close(sessionId) {
+    const notification = this.open.get(sessionId);
+    if (!notification) return;
+    this.open.delete(sessionId);
+    notification.close();
   }
 }
 
