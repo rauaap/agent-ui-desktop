@@ -51,11 +51,23 @@ export class TranscriptView {
       this.updateScrollButton();
     });
 
+    // Anything that changes the transcript's width or height reflows every row
+    // and so moves the bottom: a zoom change, a window resize, the sidebar being
+    // collapsed, the composer growing under a long prompt. A reader who was
+    // following along should still be at the bottom afterwards rather than
+    // stranded part way up what they were watching stream.
+    this.resizeObserver = new ResizeObserver(() => {
+      if (this.stick) this.scrollToBottom();
+      else this.updateScrollButton();
+    });
+    this.resizeObserver.observe(this.list);
+
     this.unsubscribe = store.subscribe(sessionId, (changes) => this.applyChanges(changes));
     this.rebuild();
   }
 
   destroy() {
+    this.resizeObserver.disconnect();
     this.unsubscribe();
     this.nodes.clear();
   }

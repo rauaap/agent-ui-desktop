@@ -57,6 +57,15 @@ export class SessionPane {
     this.root.appendChild(this.transcript.wrap);
     this.root.appendChild(this.buildComposer());
 
+    // Zoom and window resizes change the composer's viewport-relative growth
+    // cap, so a box sitting at the old limit has to be re-measured. Only the
+    // visible pane can be: a `display: none` one has no scrollHeight to read,
+    // and it is re-measured when it next becomes visible instead.
+    this.onViewportChange = () => {
+      if (this.root.classList.contains('active')) this.autoGrow();
+    };
+    window.addEventListener('resize', this.onViewportChange);
+
     this.unsubscribe = store.subscribe(sessionId, (changes) => {
       if (changes.some((c) => c.op === 'meta' || c.op === 'reset')) this.refresh();
     });
@@ -134,9 +143,16 @@ export class SessionPane {
     return composer;
   }
 
+  /**
+   * Size the box to its text. The cap comes from the stylesheet rather than a
+   * constant here: it is partly viewport-relative, so on a short window — a
+   * laptop screen at high zoom — it is smaller than the 190px a roomy one gets,
+   * and a number duplicated here would grow the box past it.
+   */
   autoGrow() {
     this.input.style.height = 'auto';
-    this.input.style.height = `${Math.min(this.input.scrollHeight, 190)}px`;
+    const cap = parseFloat(getComputedStyle(this.input).maxHeight);
+    this.input.style.height = `${Math.min(this.input.scrollHeight, cap || Infinity)}px`;
   }
 
   /**
@@ -224,10 +240,14 @@ export class SessionPane {
   }
 
   focusComposer() {
+    // Nothing could be measured while the pane was hidden, so size the box now
+    // that it is on screen — a draft left in it survives the tab switch.
+    this.autoGrow();
     if (!this.input.disabled) this.input.focus();
   }
 
   destroy() {
+    window.removeEventListener('resize', this.onViewportChange);
     this.unsubscribe();
     this.socket.close();
     this.transcript.destroy();

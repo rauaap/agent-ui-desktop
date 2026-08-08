@@ -50,7 +50,12 @@
   /* metrics */
   --radius: 10px;
   --radius-lg: 14px;
-  --sidebar-w: 260px;
+
+  /* Browser zoom shrinks the viewport measured in CSS pixels — 140% zoom on a
+     1366px screen leaves 976px to lay out in — so the sidebar is a share of the
+     window rather than a constant. The floor keeps project names readable; the
+     ceiling is the width it has always had on a roomy screen. */
+  --sidebar-w: clamp(180px, 26vw, 260px);
 
   --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --mono: ui-monospace, "JetBrains Mono", "DejaVu Sans Mono", Menlo, monospace;
