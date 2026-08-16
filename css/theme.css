@@ -34,6 +34,8 @@
 
   --danger-soft: rgba(239, 111, 99, 0.13);
   --danger-line: rgba(239, 111, 99, 0.4);
+  --info-soft: rgba(126, 167, 224, 0.13);
+  --info-line: rgba(126, 167, 224, 0.4);
 
   /* bash mode — `!` commands and their output. Its own set of names even though
      they currently spend the danger red, so restyling the feature is one edit

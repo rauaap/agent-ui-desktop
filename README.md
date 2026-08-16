@@ -46,6 +46,13 @@ headers, so this only works if you add them — the supported path is `WEB_ROOT`
   directory; the directory tracks the name until you edit it, after which the
   two are independent. Forgetting a project removes it and its sessions but
   **never touches the disk**.
+- **Worktree sessions** — for a project that is a git repo, a new session can
+  get its own `git worktree` on a new branch, so two agents can work on the same
+  project without fighting over one checkout. The directory and the branch are
+  seeded from the session name and editable. Worktree sessions are tagged in the
+  tree and their directory is spelled out in the pane header; deleting one
+  removes the worktree, unless git refuses because it still holds uncommitted or
+  untracked work.
 - **Session tabs** — several sessions open at once, each with its own live
   WebSocket. The tab's status dot shows idle / running / needs-you at a glance.
   Open tabs are restored on reload.
@@ -81,6 +88,7 @@ js/
   dialogs.js          native <dialog> forms for CRUD and settings
   notify.js           Notification API + "don't shout about what's on screen"
   names.js            adjective-noun session-name suggestions
+  worktree.js         session name -> worktree directory and branch seed
   app.js              bootstrap and wiring
   render/
     markdown.js       markdown subset -> HTML (port of Markdown.java)
@@ -157,10 +165,32 @@ split the agent message below it. The card is bordered red and its output sits
 in a plain code block: the agent never saw any of this, and the block is there to
 be copied into a prompt if you decide it should.
 
+### A worktree session belongs to its project, not to its directory
+
+The tree used to group sessions by string-matching `working_dir` against the
+project path. A worktree session's `working_dir` is somewhere else entirely, so
+that rule would drop it out of the very project it was created in. Grouping is
+`project_id` now, with path equality kept only as the fallback for a server old
+enough not to send an id — which is also a server old enough to have no
+worktrees.
+
+Creating the worktree is part of `POST /sessions`, not a call the client makes
+first: with two requests, a browser tab closed in between would leave a worktree
+on disk that no session claims and nothing will ever clean up. So a worktree
+that cannot be created is a 400 with git's own words in it, the dialog stays
+open, and no session exists.
+
+Removal is never forced, and **git counts untracked files as dirty** — an agent
+that created so much as one new file leaves a tree git will refuse to remove. So
+"the worktree was left in place" is the *common* outcome of deleting a session
+that did any work, not an edge case, and it is phrased as a notice with git's
+message in it rather than as an error. The session is deleted either way.
+
 ## Tests
 
-The pure modules — the diff, the markdown parser, the reducer — have unit tests
-ported from the Android client's `LineDiffTest` and `MarkdownTest`:
+The pure modules — the diff, the markdown parser, the reducer, the worktree
+seeds — have unit tests ported from the Android client's `LineDiffTest`,
+`MarkdownTest` and `WorktreeTest`:
 
 ```sh
 node test/run.js          # any JS runtime

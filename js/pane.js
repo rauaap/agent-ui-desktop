@@ -79,7 +79,13 @@ export class SessionPane {
 
     const titles = el('div', 'titles');
     this.nameView = el('div', 'pane-name');
+    // The cwd, tagged when it is a worktree the server made for this session
+    // rather than the project's own directory — so it is obvious the session is
+    // not running where its siblings are.
     this.dirView = el('div', 'pane-dir');
+    this.worktreeTag = el('span', 'wt', 'WORKTREE');
+    this.dirText = el('span', 'path');
+    this.dirView.append(this.worktreeTag, this.dirText);
     titles.append(this.nameView, this.dirView);
     head.appendChild(titles);
 
@@ -204,7 +210,9 @@ export class SessionPane {
   refresh() {
     const state = this.store.session(this.id);
     this.nameView.textContent = state.name || '';
-    this.dirView.textContent = state.workingDir || '';
+    this.dirText.textContent = state.workingDir || '';
+    this.dirView.title = state.workingDir || '';
+    this.worktreeTag.style.display = state.ownsWorktree ? '' : 'none';
 
     const offline = !state.connected;
     this.statusPill.className = `pill ${offline ? 'offline' : state.status}`;

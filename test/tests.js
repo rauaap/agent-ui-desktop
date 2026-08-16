@@ -15,6 +15,7 @@ import { ADD, DELETE, MAX_DIFF_LINES, diff } from '../js/render/diff.js';
 import { toHtml } from '../js/render/markdown.js';
 import { Store, parseComposerInput, reduce, rowText } from '../js/store.js';
 import { toolSummary } from '../js/tools.js';
+import { pathFor, slug } from '../js/worktree.js';
 
 const results = [];
 
@@ -455,6 +456,42 @@ test('reducer: bash rows are searchable by command and by output', () => {
     { type: 'bash_output', command: 'git status', stdout: 'nothing to commit', exit_code: 0 });
   assertTrue(rowText(s.rows[0]).includes('git status'));
   assertTrue(rowText(s.rows[0]).includes('nothing to commit'));
+});
+
+/* ------------------------------------------------------------------ */
+/* worktree seeds                                                     */
+/* ------------------------------------------------------------------ */
+
+test('slug: a name becomes a branch-safe token', () => {
+  assertEqual(slug('Fix login!'), 'fix-login');
+  assertEqual(slug('quiet-harbor'), 'quiet-harbor');
+});
+
+test('slug: runs of junk collapse and never lead or trail', () => {
+  assertEqual(slug('  ..a//b -- c.. '), 'a-b-c');
+  assertEqual(slug('--wip--'), 'wip');
+});
+
+test('slug: a name with nothing to keep falls back', () => {
+  assertEqual(slug('!!!'), 'session');
+  assertEqual(slug(''), 'session');
+  assertEqual(slug(null), 'session');
+});
+
+test('slug: a long name is capped without a dangling dash', () => {
+  const s = slug('a'.repeat(40) + ' ' + 'b'.repeat(40));
+  assertTrue(s.length <= 48, `capped, got ${s.length}`);
+  assertTrue(!s.endsWith('-'), 'no trailing dash');
+});
+
+test('worktree path: a sibling of the project directory', () => {
+  assertEqual(pathFor('/home/me/app', 'fix login'), '/home/me/app-fix-login');
+  assertEqual(pathFor('/home/me/app/', 'fix login'), '/home/me/app-fix-login');
+});
+
+test('worktree path: a root project has no segment to suffix', () => {
+  assertEqual(pathFor('/', 'fix login'), '/fix-login');
+  assertEqual(pathFor('', 'fix login'), '/fix-login');
 });
 
 export { results };

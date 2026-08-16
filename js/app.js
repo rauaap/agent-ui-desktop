@@ -16,6 +16,7 @@ import {
   forgetProjectDialog,
   newProjectDialog,
   newSessionDialog,
+  noticeDialog,
   sessionSettingsDialog,
 } from './dialogs.js';
 
@@ -91,6 +92,7 @@ window.addEventListener('focus', dismissNotifications);
 const metaFrom = (session) => ({
   name: session.name,
   workingDir: session.working_dir,
+  ownsWorktree: !!session.owns_worktree,
   agent: session.agent,
   status: session.status,
   autoApproveWrite: !!session.auto_approve_write,
@@ -137,8 +139,9 @@ async function createProject() {
   }
 }
 
-async function forgetProject(project, sessionCount) {
-  if (!(await forgetProjectDialog(project, sessionCount))) return;
+async function forgetProject(project, sessions) {
+  const worktrees = sessions.filter((s) => s.owns_worktree).length;
+  if (!(await forgetProjectDialog(project, sessions.length, worktrees))) return;
   try {
     const result = await api.deleteProject(project.path);
     await refresh();
@@ -146,16 +149,37 @@ async function forgetProject(project, sessionCount) {
     toast(removed
       ? `Forgot ${project.name} and ${removed} session${removed === 1 ? '' : 's'}`
       : `Forgot ${project.name}`);
+    reportWorktreesLeft(result?.worktree_errors);
   } catch (error) {
     fail(error);
   }
+}
+
+/**
+ * Say which of a project's worktrees git declined to remove. Removal is never
+ * forced and git counts untracked files as dirty, so any session that created
+ * a file leaves one behind: this is the common outcome, not a failure.
+ */
+function reportWorktreesLeft(errors) {
+  if (!errors?.length) return;
+  const one = errors.length === 1;
+  noticeDialog(
+    'Worktrees left in place',
+    `${one ? 'One worktree' : `${errors.length} worktrees`} still had uncommitted or untracked `
+    + `files, so ${one ? 'it was' : 'they were'} left on disk. The project and its sessions are `
+    + 'forgotten either way.',
+    errors.map((e) => `${e.session} — ${e.path}\n${e.error}`),
+  );
 }
 
 async function createSession(project) {
   const spec = await newSessionDialog(project);
   if (!spec) return;
   try {
-    const session = await api.createSession(spec.name, project.path, spec.agent);
+    // A worktree that could not be created means no session at all, so the
+    // failure lands as a toast and nothing is opened — rather than dropping the
+    // user into a session running somewhere they did not expect.
+    const session = await api.createSession(spec.name, project.path, spec.agent, spec.worktree);
     await refresh();
     store.setMeta(session.id, metaFrom(session));
     workspace.openSession(session.id);
@@ -181,14 +205,26 @@ async function openSessionSettings(id) {
   if (result.deleted) {
     const confirmed = await confirmDialog(
       `Delete “${state.name}”?`,
-      'The session and its whole transcript are removed. Files the agent wrote stay on disk.',
+      state.ownsWorktree
+        ? 'The session and its whole transcript are removed, and so is its worktree at '
+          + `${state.workingDir} — unless that still holds uncommitted or untracked files, in `
+          + 'which case it is left in place. The project directory is untouched either way.'
+        : 'The session and its whole transcript are removed. Files the agent wrote stay on disk.',
     );
     if (!confirmed) return;
     try {
-      await api.deleteSession(id);
+      const outcome = await api.deleteSession(id);
       workspace.closeSession(id);
       store.forget(id);
       await refresh();
+      if (outcome?.worktree_error) {
+        noticeDialog(
+          'Worktree left in place',
+          'The session was deleted, but its worktree still has uncommitted or untracked files, '
+          + 'so it was left on disk.',
+          [`${state.workingDir}\n${outcome.worktree_error}`],
+        );
+      }
     } catch (error) {
       fail(error);
     }

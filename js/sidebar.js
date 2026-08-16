@@ -5,9 +5,9 @@
  * this scale the whole tree fits on screen, which means every session is one
  * click away and there is only one selection concept to keep straight.
  *
- * `GET /sessions` carries `working_dir` on every row and there are no nested
- * project routes, so the grouping happens here — the same thing the Android
- * client does.
+ * `GET /sessions` carries the link on every row and there are no nested project
+ * routes, so the grouping happens here — the same thing the Android client
+ * does.
  */
 
 const EXPANDED_KEY = 'agent-ui.expanded';
@@ -18,6 +18,19 @@ const el = (tag, className, text) => {
   if (text !== undefined) node.textContent = text;
   return node;
 };
+
+/**
+ * Whether a session belongs to a project.
+ *
+ * The link is `project_id`: a session running in a worktree has a
+ * `working_dir` somewhere else entirely, and matching on the path would drop it
+ * out of the list it belongs to. Path equality survives only as the fallback
+ * for a server old enough not to send an id — which is also a server old enough
+ * to have no worktrees.
+ */
+const belongsTo = (session, project) => (project.id && session.project_id
+  ? session.project_id === project.id
+  : session.working_dir === project.path);
 
 export class Sidebar {
   /**
@@ -66,16 +79,9 @@ export class Sidebar {
       return;
     }
 
-    const byDir = new Map();
-    for (const session of this.sessions) {
-      const list = byDir.get(session.working_dir) || [];
-      list.push(session);
-      byDir.set(session.working_dir, list);
-    }
-
     for (const project of this.projects) {
       const open = this.expanded.has(project.path);
-      const sessions = byDir.get(project.path) || [];
+      const sessions = this.sessions.filter((s) => belongsTo(s, project));
 
       const row = el('button', `project${open ? ' open' : ''}`);
       row.appendChild(el('span', 'twisty', '▸'));
@@ -87,7 +93,7 @@ export class Sidebar {
       forget.title = 'Forget this project';
       forget.addEventListener('click', (event) => {
         event.stopPropagation();
-        this.handlers.onForgetProject(project, sessions.length);
+        this.handlers.onForgetProject(project, sessions);
       });
       row.appendChild(forget);
 
@@ -107,7 +113,17 @@ export class Sidebar {
         item.dataset.id = session.id;
         item.appendChild(el('span', `dot ${this.statusOf(session)}`));
         item.appendChild(el('span', 'sname', session.name || session.id.slice(0, 8)));
-        item.title = `${session.name}\n${session.agent}`;
+        // A worktree session runs somewhere other than the project directory,
+        // which the tree otherwise gives no hint of. The row has no space for
+        // a path, so the badge carries it in its tooltip and the pane header
+        // spells it out in full.
+        if (session.owns_worktree) {
+          const mark = el('span', 'wt', 'WT');
+          mark.title = `Worktree: ${session.working_dir}`;
+          item.appendChild(mark);
+        }
+        item.title = `${session.name}\n${session.agent}`
+          + (session.owns_worktree ? `\n${session.working_dir}` : '');
         item.addEventListener('click', () => this.handlers.onOpenSession(session));
         list.appendChild(item);
       }

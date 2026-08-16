@@ -75,7 +75,14 @@ export const listProjects = () => request('GET', '/projects');
 export const createProject = (path, name) =>
   request('POST', '/projects', { path, name });
 
-/** Forgets the project and its sessions. Never touches the directory on disk. */
+/**
+ * Forgets the project and its sessions. Never touches the directory on disk —
+ * except for worktrees the server itself created, which it removes with their
+ * sessions.
+ *
+ * Resolves `{sessions_deleted, worktrees_removed, worktree_errors}`, where each
+ * error is `{session, path, error}` for a worktree git refused to remove.
+ */
 export const deleteProject = (path) => request('DELETE', '/projects', { path });
 
 /* ------------------------------------------------------------------ */
@@ -84,8 +91,27 @@ export const deleteProject = (path) => request('DELETE', '/projects', { path });
 
 export const listSessions = () => request('GET', '/sessions');
 
-export const createSession = (name, workingDir, agent) =>
-  request('POST', '/sessions', { name, working_dir: workingDir, agent });
+/**
+ * Create a session in `projectPath`, optionally in a git worktree of it —
+ * pass `{path, branch}` for that, or nothing for the plain case.
+ *
+ * The worktree is part of *this* request rather than one the client makes
+ * first, so ownership is atomic: a client that died between two calls would
+ * leave a worktree on disk that no session claims. If anything about it fails
+ * the response is a 400 and no session exists.
+ *
+ * The path travels as both `project_path` and its deprecated spelling
+ * `working_dir`: a server that knows the new name ignores the old one, and one
+ * that doesn't ignores the new one.
+ */
+export const createSession = (name, projectPath, agent, worktree = null) =>
+  request('POST', '/sessions', {
+    name,
+    project_path: projectPath,
+    working_dir: projectPath,
+    agent,
+    ...(worktree ? { worktree: { path: worktree.path, branch: worktree.branch } } : {}),
+  });
 
 export const renameSession = (id, name) =>
   request('PATCH', `/sessions/${id}`, { name });
@@ -96,6 +122,14 @@ export const setAutoApprove = (id, write, command) =>
     auto_approve_command: command,
   });
 
+/**
+ * Deletes the session and, if the server created one for it, its worktree.
+ *
+ * Resolves `{worktree_removed, worktree_error}`. Removal is never forced, so a
+ * worktree holding modified or untracked files is left on disk and reported
+ * here — the session is deleted either way, and this is a notice rather than a
+ * failed request.
+ */
 export const deleteSession = (id) => request('DELETE', `/sessions/${id}`);
 
 export const stopSession = (id) => request('POST', `/sessions/${id}/stop`);

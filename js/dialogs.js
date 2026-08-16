@@ -6,6 +6,7 @@
  */
 
 import { suggestName } from './names.js';
+import { pathFor, slug } from './worktree.js';
 
 const el = (tag, className, text) => {
   const node = document.createElement(tag);
@@ -24,6 +25,8 @@ const el = (tag, className, text) => {
  *   their own (a Delete button that shouldn't need Save pressed afterwards)
  * @param {string} spec.confirm label for the confirming button
  * @param {boolean} [spec.danger] style the confirm button as destructive
+ * @param {boolean} [spec.dismissOnly] drop the Cancel button — for a dialog
+ *   that reports something rather than asking it
  * @param {() => any} spec.collect returns the resolved value, or throws a
  *   message to show inline instead of closing
  */
@@ -42,7 +45,8 @@ function show(spec) {
     const actions = el('div', 'dlg-actions');
     const cancel = el('button', 'btn', 'Cancel');
     const confirm = el('button', `btn ${spec.danger ? 'deny' : 'primary'}`, spec.confirm);
-    actions.append(cancel, confirm);
+    if (!spec.dismissOnly) actions.appendChild(cancel);
+    actions.appendChild(confirm);
     dialog.appendChild(actions);
 
     let settled = null;
@@ -95,6 +99,35 @@ function field(parent, label, value, { mono = false, hint } = {}) {
   if (hint) wrap.appendChild(el('div', 'dlg-note', hint));
   parent.appendChild(wrap);
   return input;
+}
+
+/** A checkbox with a label and a line of help. Returns the input. */
+function toggle(parent, label, help, checked) {
+  const row = el('label', 'toggle-row');
+  const input = el('input');
+  input.type = 'checkbox';
+  input.checked = checked;
+  const text = el('div', 'tlabel');
+  text.appendChild(el('div', null, label));
+  text.appendChild(el('div', 'thelp', help));
+  row.append(input, text);
+  parent.appendChild(row);
+  return input;
+}
+
+/**
+ * Keep `target` tracking `source` through `derive`, until the user edits the
+ * target by hand — after which the two are independent. The rule the new
+ * project dialog applies to name vs directory, and the new session dialog to
+ * name vs worktree.
+ */
+function seedFrom(source, target, derive) {
+  let linked = true;
+  target.value = derive(source.value);
+  source.addEventListener('input', () => {
+    if (linked) target.value = derive(source.value);
+  });
+  target.addEventListener('input', () => { linked = false; });
 }
 
 /* ------------------------------------------------------------------ */
@@ -156,7 +189,7 @@ export function newProjectDialog() {
 }
 
 /** Confirm forgetting a project. Resolves true when confirmed. */
-export function forgetProjectDialog(project, sessionCount) {
+export function forgetProjectDialog(project, sessionCount, worktreeCount = 0) {
   return show({
     title: `Forget “${project.name || project.path}”?`,
     confirm: 'Forget',
@@ -168,6 +201,12 @@ export function forgetProjectDialog(project, sessionCount) {
         body.appendChild(el('div', 'dlg-note warn',
           `${sessionCount} session${sessionCount === 1 ? '' : 's'} and their transcripts `
           + 'will be deleted — sessions are reachable only through their project.'));
+      }
+      if (worktreeCount > 0) {
+        body.appendChild(el('div', 'dlg-note',
+          `${worktreeCount} of them run${worktreeCount === 1 ? 's' : ''} in a worktree Agent UI `
+          + 'created; those directories are removed too, unless they still hold uncommitted or '
+          + 'untracked files.'));
       }
       if (project.exists === false) {
         body.appendChild(el('div', 'dlg-note',
@@ -187,10 +226,16 @@ const AGENTS = [
   { id: 'opencode', label: 'OpenCode' },
 ];
 
-/** New session in a project: `{name, agent}`, or null. */
+/**
+ * New session in a project: `{name, agent, worktree}`, or null. `worktree` is
+ * `{path, branch}` when the toggle is on, and null otherwise.
+ */
 export function newSessionDialog(project) {
   let nameInput;
   let agentSelect;
+  let worktreeToggle = null;
+  let pathInput;
+  let branchInput;
 
   return show({
     title: `New session in ${project.name || project.path}`,
@@ -214,11 +259,55 @@ export function newSessionDialog(project) {
       const dir = el('div', 'dlg-note', project.path);
       dir.style.fontFamily = 'var(--mono)';
       body.appendChild(dir);
+
+      // Offered only for a project the server reports as a git repo: anywhere
+      // else `git worktree add` would refuse, and the toggle would be an
+      // invitation to a 400. The server checks again for real.
+      if (!project.is_git_repo) return;
+
+      worktreeToggle = toggle(
+        body,
+        'Create a git worktree',
+        'Run this session in its own checkout on a new branch, so it does not '
+        + 'share the project directory with other sessions.',
+        false,
+      );
+
+      // The inputs live in their own block so the toggle can hide them whole,
+      // rather than leaving two dead fields taking up the dialog.
+      const fields = el('div', 'subfields');
+      fields.style.display = 'none';
+      pathInput = field(fields, 'Worktree directory', '', {
+        mono: true,
+        hint: 'Created by git. Must not already exist, or must be empty.',
+      });
+      branchInput = field(fields, 'Branch', '', {
+        mono: true,
+        hint: 'Created off the project’s current HEAD. Must not already exist.',
+      });
+      body.appendChild(fields);
+
+      seedFrom(nameInput, pathInput, (name) => pathFor(project.path, name));
+      seedFrom(nameInput, branchInput, slug);
+      worktreeToggle.addEventListener('change', () => {
+        fields.style.display = worktreeToggle.checked ? '' : 'none';
+      });
     },
     collect: () => {
       const name = nameInput.value.trim();
       if (!name) throw new Error('Give the session a name');
-      return { name, agent: agentSelect.value };
+      if (!worktreeToggle?.checked) return { name, agent: agentSelect.value, worktree: null };
+
+      // A trailing slash would make the path look unlike the one we get back.
+      const path = pathInput.value.trim().replace(/\/+$/, '');
+      const branch = branchInput.value.trim();
+      if (!path) throw new Error('Give the worktree a directory');
+      if (!path.startsWith('/')) throw new Error('The worktree directory must be an absolute path');
+      if (path === project.path.replace(/\/+$/, '')) {
+        throw new Error('The worktree must go somewhere other than the project directory');
+      }
+      if (!branch) throw new Error('Give the worktree a branch name');
+      return { name, agent: agentSelect.value, worktree: { path, branch } };
     },
   });
 }
@@ -232,19 +321,6 @@ export function sessionSettingsDialog(state) {
   let writeToggle;
   let commandToggle;
   let deleted = false;
-
-  const toggle = (body, label, help, checked) => {
-    const row = el('label', 'toggle-row');
-    const input = el('input');
-    input.type = 'checkbox';
-    input.checked = checked;
-    const text = el('div', 'tlabel');
-    text.appendChild(el('div', null, label));
-    text.appendChild(el('div', 'thelp', help));
-    row.append(input, text);
-    body.appendChild(row);
-    return input;
-  };
 
   return show({
     title: 'Session settings',
@@ -298,6 +374,28 @@ export function confirmDialog(title, message, confirmLabel = 'Delete') {
     confirm: confirmLabel,
     danger: true,
     body: (body) => body.appendChild(el('div', 'dlg-note', message)),
+    collect: () => true,
+  });
+}
+
+/**
+ * Report something and wait for an OK — a dialog rather than a toast, because
+ * what it carries is git's own words about a worktree it declined to remove,
+ * which is more than a line and worth reading.
+ *
+ * @param {string} title
+ * @param {string} message
+ * @param {string[]} [details] monospace lines under it, e.g. paths and stderr
+ */
+export function noticeDialog(title, message, details = []) {
+  return show({
+    title,
+    confirm: 'OK',
+    dismissOnly: true,
+    body: (body) => {
+      body.appendChild(el('div', 'dlg-note', message));
+      for (const line of details) body.appendChild(el('div', 'dlg-detail', line));
+    },
     collect: () => true,
   });
 }
