@@ -56,8 +56,12 @@ export class Sidebar {
 
   setActive(id) {
     this.activeId = id;
+    // `dataset` hands back a string whatever went in, so the comparison is made
+    // between strings explicitly — an id that arrived as a number would match
+    // nothing at all, and quietly.
+    const wanted = id === null || id === undefined ? null : String(id);
     for (const node of this.root.querySelectorAll('.session')) {
-      node.classList.toggle('active', node.dataset.id === id);
+      node.classList.toggle('active', node.dataset.id === wanted);
     }
   }
 
@@ -109,10 +113,11 @@ export class Sidebar {
 
       const list = el('div', 'sessions');
       for (const session of sessions) {
-        const item = el('button', `session${session.id === this.activeId ? ' active' : ''}`);
-        item.dataset.id = session.id;
+        const active = String(session.id) === String(this.activeId);
+        const item = el('button', `session${active ? ' active' : ''}`);
+        item.dataset.id = String(session.id);
         item.appendChild(el('span', `dot ${this.statusOf(session)}`));
-        item.appendChild(el('span', 'sname', session.name || session.id.slice(0, 8)));
+        item.appendChild(el('span', 'sname', session.name || String(session.id)));
         // A worktree session runs somewhere other than the project directory,
         // which the tree otherwise gives no hint of. The row has no space for
         // a path, so the badge carries it in its tooltip and the pane header
@@ -139,7 +144,7 @@ export class Sidebar {
   /** Refresh just the status dots, without rebuilding the tree. */
   refreshStatuses() {
     for (const node of this.root.querySelectorAll('.session')) {
-      const session = this.sessions.find((s) => s.id === node.dataset.id);
+      const session = this.sessions.find((s) => String(s.id) === node.dataset.id);
       if (!session) continue;
       const dot = node.querySelector('.dot');
       if (dot) dot.className = `dot ${this.statusOf(session)}`;

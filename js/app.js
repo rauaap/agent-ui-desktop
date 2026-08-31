@@ -106,7 +106,10 @@ const metaFrom = (session) => ({
 async function refresh() {
   try {
     const [projects, sessions] = await Promise.all([api.listProjects(), api.listSessions()]);
-    sessionsById = new Map(sessions.map((s) => [s.id, s]));
+    // Keyed by the string form, like every other id-keyed collection here: a
+    // `Map` or `Set` lookup is type-sensitive, and `has(1)` misses a key of
+    // `"1"` without saying so.
+    sessionsById = new Map(sessions.map((s) => [String(s.id), s]));
 
     // Seed metadata for sessions we have not opened, so the tree and any
     // restored tab show a name before their socket says anything.
@@ -314,9 +317,12 @@ document.querySelector('.sidebar-head').insertBefore(
 
 (async () => {
   const { sessions } = await refresh();
-  const known = new Set(sessions.map((s) => s.id));
+  const known = new Set(sessions.map((s) => String(s.id)));
   // Restore the tabs that were open last time, skipping any that have since
-  // been deleted server-side.
+  // been deleted server-side. This fails closed on purpose: a stored id is
+  // opened only if the server still lists it, which is also what makes ids
+  // saved before the server renumbered its rows harmless — they match nothing
+  // and drop out after one run, so there is no migration to write.
   for (const id of Workspace.restoreIds()) {
     if (known.has(id)) workspace.openSession(id);
   }

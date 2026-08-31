@@ -5,7 +5,12 @@
  * the API lives at the page's own origin — there is no host/port/TLS setting to
  * get wrong, unlike the Android client's Prefs. `?api=` is honoured purely so
  * the page can be opened from disk during development.
+ *
+ * Every response carrying a project or session passes through `ids.js` on the
+ * way out: ids are numbers on the wire and strings everywhere above this file.
  */
+
+import { asProject, asSession, each } from './ids.js';
 
 const override = new URLSearchParams(location.search).get('api');
 
@@ -70,10 +75,10 @@ function detail(text, status) {
 /* projects                                                           */
 /* ------------------------------------------------------------------ */
 
-export const listProjects = () => request('GET', '/projects');
+export const listProjects = () => request('GET', '/projects').then(each(asProject));
 
 export const createProject = (path, name) =>
-  request('POST', '/projects', { path, name });
+  request('POST', '/projects', { path, name }).then(asProject);
 
 /**
  * Forgets the project and its sessions. Never touches the directory on disk —
@@ -89,7 +94,7 @@ export const deleteProject = (path) => request('DELETE', '/projects', { path });
 /* sessions                                                           */
 /* ------------------------------------------------------------------ */
 
-export const listSessions = () => request('GET', '/sessions');
+export const listSessions = () => request('GET', '/sessions').then(each(asSession));
 
 /**
  * Create a session in `projectPath`, optionally in a git worktree of it —
@@ -111,16 +116,16 @@ export const createSession = (name, projectPath, agent, worktree = null) =>
     working_dir: projectPath,
     agent,
     ...(worktree ? { worktree: { path: worktree.path, branch: worktree.branch } } : {}),
-  });
+  }).then(asSession);
 
 export const renameSession = (id, name) =>
-  request('PATCH', `/sessions/${id}`, { name });
+  request('PATCH', `/sessions/${id}`, { name }).then(asSession);
 
 export const setAutoApprove = (id, write, command) =>
   request('PATCH', `/sessions/${id}`, {
     auto_approve_write: write,
     auto_approve_command: command,
-  });
+  }).then(asSession);
 
 /**
  * Deletes the session and, if the server created one for it, its worktree.

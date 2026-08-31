@@ -12,6 +12,7 @@
  */
 
 import { ADD, DELETE, MAX_DIFF_LINES, diff } from '../js/render/diff.js';
+import { asProject, asSession, storedIds } from '../js/ids.js';
 import { toHtml } from '../js/render/markdown.js';
 import { Store, parseComposerInput, reduce, rowText } from '../js/store.js';
 import { toolSummary } from '../js/tools.js';
@@ -492,6 +493,45 @@ test('worktree path: a sibling of the project directory', () => {
 test('worktree path: a root project has no segment to suffix', () => {
   assertEqual(pathFor('/', 'fix login'), '/fix-login');
   assertEqual(pathFor('', 'fix login'), '/fix-login');
+});
+
+/* ------------------------------------------------------------------ */
+/* ids                                                                */
+/* ------------------------------------------------------------------ */
+
+test('ids: a numeric session id becomes a string, with its project link', () => {
+  const session = asSession({ id: 12, project_id: 3, name: 'work' });
+  assertEqual(session.id, '12');
+  assertEqual(session.project_id, '3');
+  assertEqual(session.name, 'work', 'everything else is left alone');
+});
+
+test('ids: a uuid from an old server passes through untouched', () => {
+  assertEqual(asProject({ id: 'a3f1-9c' }).id, 'a3f1-9c');
+});
+
+test('ids: a missing id is not invented', () => {
+  const session = asSession({ id: 4 });
+  assertTrue(!('project_id' in session), 'no project_id where the server sent none');
+  assertEqual(asSession({ id: 4, project_id: null }).project_id, null);
+});
+
+test('ids: the coerced id matches what the DOM and a Set would hold', () => {
+  const sessions = [{ id: 1 }, { id: 2 }].map(asSession);
+  // `element.dataset.id = 1` reads back as "1", and Set keys are type-sensitive.
+  const known = new Set(sessions.map((s) => s.id));
+  assertTrue(known.has('1'), 'a Set of ids is testable with a string');
+  assertTrue(sessions.some((s) => s.id === '2'), 'an id compares equal to its DOM form');
+});
+
+test('ids: restored tabs survive both id eras', () => {
+  assertEqual(storedIds([1, '2', 'a3f1-9c']).join(), '1,2,a3f1-9c');
+});
+
+test('ids: restored junk is dropped rather than opened', () => {
+  assertEqual(storedIds([null, {}, undefined, true, 7]).join(), '7');
+  assertEqual(storedIds(null).length, 0);
+  assertEqual(storedIds('7').length, 0, 'a bare string is not a tab list');
 });
 
 export { results };

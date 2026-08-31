@@ -8,6 +8,7 @@
  */
 
 import { SessionPane } from './pane.js';
+import { storedIds } from './ids.js';
 
 const OPEN_TABS_KEY = 'agent-ui.open-tabs';
 
@@ -126,7 +127,9 @@ export class Workspace {
     const entry = this.open.get(id);
     if (!entry) return;
     const state = this.store.session(id);
-    entry.label.textContent = state.name || id.slice(0, 8);
+    // The fallback is the whole id: it is a small integer, and truncating one
+    // was a habit from when ids were uuids.
+    entry.label.textContent = state.name || String(id);
     entry.tab.title = state.workingDir || '';
     entry.dot.className = `dot ${state.connected ? state.status : ''}`;
   }
@@ -150,11 +153,11 @@ export class Workspace {
     }
   }
 
+  /** Tab ids as they were persisted, in the string form the client works in. */
   static restoreIds() {
     try {
       const raw = localStorage.getItem(OPEN_TABS_KEY);
-      const parsed = raw ? JSON.parse(raw) : [];
-      return Array.isArray(parsed) ? parsed.filter((v) => typeof v === 'string') : [];
+      return storedIds(raw ? JSON.parse(raw) : []);
     } catch {
       return [];
     }

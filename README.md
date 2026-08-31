@@ -79,6 +79,7 @@ css/theme.css         palette, ported from the Android client's Theme.java
 css/app.css           layout and component styles
 js/
   api.js              REST over fetch(), same-origin
+  ids.js              ids: numbers on the wire, strings everywhere above api.js
   socket.js           one WebSocket per open session: backoff + buffered replay
   store.js            per-session state and the transcript reducer — no DOM
   tools.js            pure helpers over tool_use payloads
@@ -186,11 +187,34 @@ that created so much as one new file leaves a tree git will refuse to remove. So
 that did any work, not an edge case, and it is phrased as a notice with git's
 message in it rather than as an error. The session is deleted either way.
 
+### An id is a number on the wire and a string here
+
+`projects.id` and `sessions.id` are JSON numbers; they were uuid strings until
+the server renumbered its rows. Above `api.js` they are strings, because that is
+what `dataset`, `localStorage` and a URL turn them into regardless — so the
+conversion happens once, in `ids.js`, at the door they come in through rather
+than at each of the dozen places they are compared.
+
+That is worth a section because the alternative fails *quietly*. `1 === "1"` is
+`false` and `new Set([1]).has("1")` is `false`, so an id that keeps its wire type
+does not throw or log — the active-session highlight simply stops applying, the
+status dots stop updating, and restored tabs silently never open. Nothing about
+`String(s.id)` is defensive noise; it is the only thing standing between those
+features and a no-op.
+
+An id is identity, never arithmetic: nothing here parses one back to a number,
+orders two, or slices one — that last was a uuid-era habit and would now throw
+on a number. `request_id` and an approval option's `id` are minted by the agent
+or the approval protocol, are strings already, and are left alone. Ids saved
+before the renumbering need no migration: the restore path checks each against
+the current session list and drops what it does not find, so a stale list
+corrects itself after one run.
+
 ## Tests
 
 The pure modules — the diff, the markdown parser, the reducer, the worktree
-seeds — have unit tests ported from the Android client's `LineDiffTest`,
-`MarkdownTest` and `WorktreeTest`:
+seeds, the id coercion — have unit tests, most ported from the Android client's
+`LineDiffTest`, `MarkdownTest` and `WorktreeTest`:
 
 ```sh
 node test/run.js          # any JS runtime
