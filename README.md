@@ -44,8 +44,12 @@ headers, so this only works if you add them — the supported path is `WEB_ROOT`
   count, last-activity ordering, and a `MISSING` flag when a project's directory
   has been removed on the server. Creating a project takes a name and a
   directory; the directory tracks the name until you edit it, after which the
-  two are independent. Forgetting a project removes it and its sessions but
-  **never touches the disk**.
+  two are independent.
+- **Project settings** — the ⚙ on a project row opens what the server knows
+  about it: directory, session count (and how many run in a worktree), last
+  activity, and whether it is a git repo. Both whole-project actions live there
+  — new session, and forgetting the project, which removes it and its sessions
+  but **never touches the disk**.
 - **Worktree sessions** — for a project that is a git repo, a new session can
   get its own `git worktree` on a new branch, so two agents can work on the same
   project without fighting over one checkout. The directory and the branch are
@@ -165,6 +169,28 @@ arrives rather than appended, so a command that finishes mid-stream does not
 split the agent message below it. The card is bordered red and its output sits
 in a plain code block: the agent never saw any of this, and the block is there to
 be copied into a prompt if you decide it should.
+
+### Project settings report; they do not edit
+
+The session gear saves — rename and the two auto-approve toggles are a `PATCH
+/sessions/{id}`. The project gear cannot, and that is the API's shape rather
+than an unfinished dialog: `/projects` is `GET`, `POST` and `DELETE` only, there
+is no `PATCH`, and `POST` inserts with `OR IGNORE` — so re-posting an existing
+path under a new name returns the project **unchanged** instead of renaming it.
+Moving a project's path is on the server's roadmap, and `projects.id` exists
+precisely so sessions survive it, but there is no endpoint yet.
+
+So name and directory are shown, not offered. A Name field would be a box that
+silently discards what you type, which is worse than no box at all; the note in
+the dialog says why instead. If the server grows the route, the field goes here
+and nothing else has to move.
+
+Forgetting a project moved *into* this dialog from a bare `×` on the tree row.
+It takes every session in the project and their transcripts with it, which is
+more than belongs on one click on a row you were probably only trying to expand
+— and deleting a *session* was never a one-click affordance in the tree either.
+It still asks a second time, and still reports any worktree git declined to
+remove.
 
 ### A worktree session belongs to its project, not to its directory
 

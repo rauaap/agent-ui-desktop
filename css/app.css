@@ -146,6 +146,22 @@ input, textarea {
   font-variant-numeric: tabular-nums;
 }
 
+/* Opens the project settings dialog. Always drawn, only dimmed — a settings
+ * menu nobody can find is the problem this is fixing, and hover is not a
+ * gesture a touchscreen has. It brightens with the row rather than announcing
+ * itself over the project name. */
+.project .gear {
+  flex: none;
+  padding: 0 3px;
+  border-radius: var(--radius);
+  color: var(--faint);
+  font-size: 12px;
+  opacity: 0.55;
+}
+
+.project:hover .gear { opacity: 1; }
+.project .gear:hover { color: var(--ink); background: var(--panel-hover); }
+
 .project .missing {
   font-size: 10px;
   font-weight: 600;
@@ -991,6 +1007,51 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.55); }
 /* The worktree inputs, so their toggle can hide them as one block rather than
  * leaving two dead fields taking up the dialog. */
 .dlg-body .subfields { display: flex; flex-direction: column; gap: 12px; }
+
+/* Read-only label/value rows — what the server reports about a project and
+ * offers no route to change. Boxed like a .toggle-row so it reads as one panel
+ * of facts rather than as a form somebody forgot to make editable. */
+.dlg-body .details {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+
+.detail-row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  font-size: 12.5px;
+}
+
+.detail-row .dkey {
+  flex: none;
+  width: 96px;
+  color: var(--faint);
+}
+
+/* A path has no spaces to wrap at and must not be truncated — it is the one
+ * fact here a user may need to copy — so it breaks anywhere instead. */
+.detail-row .dval {
+  flex: 1;
+  min-width: 0;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.detail-row .dval.mono { font-family: var(--mono); font-size: 12px; }
+
+/* Actions that belong to the dialog's subject rather than to the dialog, so
+ * they sit in the body and not in the footer next to Close. */
+.dlg-body .dlg-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
 
 /* git's own words about a worktree it declined to remove: preformatted, since
  * it arrives with its own line breaks and a path that must not be reflowed. */

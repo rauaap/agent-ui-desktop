@@ -85,6 +85,11 @@ function show(spec) {
     if (first) {
       first.focus();
       if (first.select) first.select();
+    } else {
+      // Nothing to fill in. Focus the dismissing button rather than letting
+      // showModal() land on whichever button the body happens to put first —
+      // in a read-only dialog that is one that acts, not one that closes.
+      confirm.focus();
     }
   });
 }
@@ -99,6 +104,26 @@ function field(parent, label, value, { mono = false, hint } = {}) {
   if (hint) wrap.appendChild(el('div', 'dlg-note', hint));
   parent.appendChild(wrap);
   return input;
+}
+
+/**
+ * A read-only label/value row, for facts the API reports but offers no way to
+ * change. Deliberately not a disabled `field()`: an input the user cannot use
+ * still looks like one they should be able to.
+ */
+function detail(parent, label, value, { mono = false } = {}) {
+  const row = el('div', 'detail-row');
+  row.appendChild(el('span', 'dkey', label));
+  row.appendChild(el('span', `dval${mono ? ' mono' : ''}`, value));
+  parent.appendChild(row);
+  return row;
+}
+
+/** `last_active_at` is ISO 8601 in UTC; read it back in the viewer's zone. */
+function whenever(iso) {
+  if (!iso) return 'Never';
+  const at = new Date(iso);
+  return Number.isNaN(at.valueOf()) ? iso : at.toLocaleString();
 }
 
 /** A checkbox with a label and a line of help. Returns the input. */
@@ -185,6 +210,91 @@ export function newProjectDialog() {
       if (parent) setDefaultDir(parent);
       return { path, name };
     },
+  });
+}
+
+/**
+ * Project settings: what the server knows about a project, and the two actions
+ * that take the whole thing as their subject.
+ *
+ * **It is read-only, and that is the API's doing rather than an omission.**
+ * `/projects` is `GET`, `POST` and `DELETE` only — there is no `PATCH` — and
+ * `POST` inserts with `OR IGNORE`, so re-posting an existing path under a new
+ * name returns the project unchanged instead of renaming it. Moving a project's
+ * path is on the server's roadmap (`projects.id` exists precisely so sessions
+ * survive it) but has no endpoint yet. A Name field here would therefore be a
+ * box that silently discards what you type, which is worse than no box: name
+ * and directory are fixed at creation, so they are reported, not offered.
+ *
+ * Resolves `{action}` — `'forget'`, `'session'`, or null for a plain dismissal.
+ * The two actions are handed back rather than performed here, because both
+ * already have a caller that knows how to run them and what to say afterwards.
+ */
+export function projectSettingsDialog(project, sessions) {
+  const worktrees = sessions.filter((s) => s.owns_worktree).length;
+  let action = null;
+
+  return show({
+    title: 'Project settings',
+    confirm: 'Close',
+    // Nothing is editable, so there is nothing to cancel — one dismissal.
+    dismissOnly: true,
+    body: (body, submit) => {
+      const facts = el('div', 'details');
+      detail(facts, 'Name', project.name || '—');
+      detail(facts, 'Directory', project.path, { mono: true });
+      detail(facts, 'Sessions', worktrees
+        ? `${sessions.length} · ${worktrees} in a worktree`
+        : String(sessions.length));
+      detail(facts, 'Last active', whenever(project.last_active_at));
+      // `is_git_repo` is a stat of `<path>/.git`, so on a directory that is no
+      // longer there it is false for the wrong reason. Say so rather than
+      // reporting a plain "No" about a path nobody can look at.
+      const missing = project.exists === false;
+      detail(facts, 'Git repository', missing
+        ? 'Unknown — the directory is missing'
+        : (project.is_git_repo ? 'Yes' : 'No'));
+      body.appendChild(facts);
+
+      if (!missing) {
+        body.appendChild(el('div', 'dlg-note', project.is_git_repo
+          ? 'New sessions here can be given their own git worktree, so two agents '
+            + 'can work on separate branches without sharing one checkout.'
+          : 'Not a git repository, so sessions here all share this one directory — '
+            + 'the worktree option is hidden rather than offered and refused.'));
+      } else {
+        // The row is the record: the server never scans the filesystem to find
+        // projects, so a directory deleted behind its back leaves the project
+        // listed rather than disappearing.
+        body.appendChild(el('div', 'dlg-note warn',
+          'The directory is gone from the server. The project stays listed because '
+          + 'the database row is the record, not a scan of the disk — creating a '
+          + 'session here recreates the directory, empty.'));
+      }
+
+      body.appendChild(el('div', 'dlg-note',
+        'Name and directory are set when the project is created and cannot be '
+        + 'changed afterwards: the server has no endpoint that updates a project.'));
+
+      // Both confirm on their own; the caller takes it from here, and forgetting
+      // asks again before anything is actually deleted.
+      const buttons = el('div', 'dlg-buttons');
+      const add = el('button', 'btn', '+  New session…');
+      add.addEventListener('click', (event) => {
+        event.preventDefault();
+        action = 'session';
+        submit();
+      });
+      const danger = el('button', 'btn deny', 'Forget this project…');
+      danger.addEventListener('click', (event) => {
+        event.preventDefault();
+        action = 'forget';
+        submit();
+      });
+      buttons.append(add, danger);
+      body.appendChild(buttons);
+    },
+    collect: () => ({ action }),
   });
 }
 

@@ -17,6 +17,7 @@ import {
   newProjectDialog,
   newSessionDialog,
   noticeDialog,
+  projectSettingsDialog,
   sessionSettingsDialog,
 } from './dialogs.js';
 
@@ -73,7 +74,7 @@ const sidebar = new Sidebar(document.getElementById('tree'), store, {
     workspace.openSession(session.id);
   },
   onNewSession: createSession,
-  onForgetProject: forgetProject,
+  onProjectSettings: openProjectSettings,
 });
 
 notifier.onActivate = (id) => {
@@ -140,6 +141,18 @@ async function createProject() {
   } catch (error) {
     fail(error);
   }
+}
+
+/**
+ * Project settings. The dialog itself changes nothing — the server has no route
+ * that updates a project — so it reports what `GET /projects` says and hands
+ * back whichever of the two whole-project actions was chosen, both of which
+ * already live here.
+ */
+async function openProjectSettings(project, sessions) {
+  const result = await projectSettingsDialog(project, sessions);
+  if (result?.action === 'forget') await forgetProject(project, sessions);
+  else if (result?.action === 'session') await createSession(project);
 }
 
 async function forgetProject(project, sessions) {

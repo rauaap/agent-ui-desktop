@@ -93,13 +93,19 @@ export class Sidebar {
       if (project.exists === false) row.appendChild(el('span', 'missing', 'MISSING'));
       row.appendChild(el('span', 'count', String(sessions.length)));
 
-      const forget = el('span', 'close', '×');
-      forget.title = 'Forget this project';
-      forget.addEventListener('click', (event) => {
+      // A gear rather than the bare × this used to be: forgetting a project
+      // takes its sessions and their transcripts with it, which is too much to
+      // hang off one click on a row you were only trying to expand. It now sits
+      // inside the settings dialog behind a second confirmation — the same
+      // shape as deleting a session, which was never a one-click affordance in
+      // the tree either.
+      const settings = el('span', 'gear', '⚙');
+      settings.title = 'Project settings';
+      settings.addEventListener('click', (event) => {
         event.stopPropagation();
-        this.handlers.onForgetProject(project, sessions);
+        this.handlers.onProjectSettings(project, sessions);
       });
-      row.appendChild(forget);
+      row.appendChild(settings);
 
       row.addEventListener('click', () => {
         if (this.expanded.has(project.path)) this.expanded.delete(project.path);
