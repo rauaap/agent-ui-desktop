@@ -10,7 +10,7 @@
  * way out: ids are numbers on the wire and strings everywhere above this file.
  */
 
-import { asProject, asSession, each } from './ids.js';
+import { asProject, asSession, asWorktree, each, wireId } from './ids.js';
 
 const override = new URLSearchParams(location.search).get('api');
 
@@ -81,14 +81,57 @@ export const createProject = (path, name) =>
   request('POST', '/projects', { path, name }).then(asProject);
 
 /**
- * Forgets the project and its sessions. Never touches the directory on disk —
- * except for worktrees the server itself created, which it removes with their
- * sessions.
+ * Forgets the project, its sessions and its worktrees. The project's own
+ * directory is never touched.
  *
- * Resolves `{sessions_deleted, worktrees_removed, worktree_errors}`, where each
- * error is `{session, path, error}` for a worktree git refused to remove.
+ * Always resolves — the sweep reports rather than fails — with
+ * `{sessions_deleted, worktrees_removed, worktree_errors}`, where each error is
+ * `{path, error}` for a worktree git declined to remove. The rows are gone
+ * either way; those directories are still on disk.
  */
 export const deleteProject = (path) => request('DELETE', '/projects', { path });
+
+/* ------------------------------------------------------------------ */
+/* worktrees                                                          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The project's worktrees, newest first, or every one when `projectPath` is
+ * omitted.
+ *
+ * A worktree is its own resource: several sessions can share one, and it
+ * outlives the sessions that used it. Each row is `{id, project_id, path,
+ * branch, created_at, session_count, exists}` — `branch` is the branch it was
+ * *created on* rather than live state, `session_count` may legitimately be 0,
+ * and `exists` is a stat of `path` at request time.
+ */
+export const listWorktrees = (projectPath) => request(
+  'GET',
+  projectPath ? `/worktrees?project_path=${encodeURIComponent(projectPath)}` : '/worktrees',
+).then(each(asWorktree));
+
+/**
+ * Runs `git worktree add -b <branch> <path>`, always cutting a **new** branch
+ * off the project's current HEAD — attaching to an existing branch has no
+ * endpoint.
+ *
+ * `path` must be absolute; the server normalises it lexically, so `..` need not
+ * be collapsed first. Nothing is created on disk when this fails, and a 409
+ * means the worktree already exists — see `js/worktree.js` for the path
+ * arithmetic that makes that a routine outcome rather than an edge case.
+ */
+export const createWorktree = (projectPath, path, branch) =>
+  request('POST', '/worktrees', { project_path: projectPath, path, branch }).then(asWorktree);
+
+/**
+ * Removes the directory (`git worktree remove`, never `--force`) and the row.
+ *
+ * A 409 means nothing was removed and the row still stands: either sessions are
+ * still attached, or git counts the tree as dirty — and it counts untracked
+ * files, so any worktree an agent did real work in refuses. That is the common
+ * path, not an error.
+ */
+export const deleteWorktree = (id) => request('DELETE', `/worktrees/${id}`);
 
 /* ------------------------------------------------------------------ */
 /* sessions                                                           */
@@ -97,25 +140,20 @@ export const deleteProject = (path) => request('DELETE', '/projects', { path });
 export const listSessions = () => request('GET', '/sessions').then(each(asSession));
 
 /**
- * Create a session in `projectPath`, optionally in a git worktree of it —
- * pass `{path, branch}` for that, or nothing for the plain case.
+ * Create a session in `projectPath`, attached to an existing worktree of it or
+ * — with `worktreeId` null — running in the project directory itself.
  *
- * The worktree is part of *this* request rather than one the client makes
- * first, so ownership is atomic: a client that died between two calls would
- * leave a worktree on disk that no session claims. If anything about it fails
- * the response is a 400 and no session exists.
- *
- * The path travels as both `project_path` and its deprecated spelling
- * `working_dir`: a server that knows the new name ignores the old one, and one
- * that doesn't ignores the new one.
+ * The worktree is no longer created here. It is its own resource, made first
+ * through `POST /worktrees` and outliving whatever sessions attach to it, so a
+ * failed worktree and a failed session are now two separate outcomes rather
+ * than one all-or-nothing request.
  */
-export const createSession = (name, projectPath, agent, worktree = null) =>
+export const createSession = (name, projectPath, agent, worktreeId = null) =>
   request('POST', '/sessions', {
     name,
     project_path: projectPath,
-    working_dir: projectPath,
     agent,
-    ...(worktree ? { worktree: { path: worktree.path, branch: worktree.branch } } : {}),
+    worktree_id: wireId(worktreeId),
   }).then(asSession);
 
 export const renameSession = (id, name) =>
@@ -128,12 +166,9 @@ export const setAutoApprove = (id, write, command) =>
   }).then(asSession);
 
 /**
- * Deletes the session and, if the server created one for it, its worktree.
- *
- * Resolves `{worktree_removed, worktree_error}`. Removal is never forced, so a
- * worktree holding modified or untracked files is left on disk and reported
- * here — the session is deleted either way, and this is a notice rather than a
- * failed request.
+ * Deletes the session and its transcript. Nothing on disk is touched — a
+ * worktree it was attached to stays where it is, for the other sessions using
+ * it or for the next one. Resolves `{status: "deleted"}` and nothing else.
  */
 export const deleteSession = (id) => request('DELETE', `/sessions/${id}`);
 

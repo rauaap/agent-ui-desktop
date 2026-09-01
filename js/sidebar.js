@@ -28,7 +28,7 @@ const el = (tag, className, text) => {
  * for a server old enough not to send an id — which is also a server old enough
  * to have no worktrees.
  */
-const belongsTo = (session, project) => (project.id && session.project_id
+export const belongsTo = (session, project) => (project.id && session.project_id
   ? session.project_id === project.id
   : session.working_dir === project.path);
 
@@ -44,13 +44,16 @@ export class Sidebar {
     this.handlers = handlers;
     this.projects = [];
     this.sessions = [];
+    /** @type {Map<string, object>} worktrees by id, for the badge's tooltip. */
+    this.worktrees = new Map();
     this.activeId = null;
     this.expanded = new Set(loadExpanded());
   }
 
-  setData(projects, sessions) {
+  setData(projects, sessions, worktrees = []) {
     this.projects = projects;
     this.sessions = sessions;
+    this.worktrees = new Map(worktrees.map((w) => [String(w.id), w]));
     this.render();
   }
 
@@ -63,6 +66,23 @@ export class Sidebar {
     for (const node of this.root.querySelectorAll('.session')) {
       node.classList.toggle('active', node.dataset.id === wanted);
     }
+  }
+
+  /**
+   * A line describing where a worktree session runs, or null for one running in
+   * the project directory.
+   *
+   * `working_dir` is the authority on the directory — the server computes it —
+   * and the worktree row adds the branch it was created on, when we have it.
+   * That branch is not live state: an agent can switch branches in there and
+   * nothing updates, hence "created on" rather than a bare branch name.
+   */
+  worktreeNote(session) {
+    if (session.worktree_id === null || session.worktree_id === undefined) return null;
+    const worktree = this.worktrees.get(String(session.worktree_id));
+    const branch = worktree?.branch ? `\ncreated on ${worktree.branch}` : '';
+    const missing = worktree?.exists === false ? '\nthe directory is missing' : '';
+    return `Worktree: ${session.working_dir}${branch}${missing}`;
   }
 
   /** Live status wins over the REST snapshot for sessions we have open. */
@@ -103,7 +123,7 @@ export class Sidebar {
       settings.title = 'Project settings';
       settings.addEventListener('click', (event) => {
         event.stopPropagation();
-        this.handlers.onProjectSettings(project, sessions);
+        this.handlers.onProjectSettings(project);
       });
       row.appendChild(settings);
 
@@ -128,13 +148,13 @@ export class Sidebar {
         // which the tree otherwise gives no hint of. The row has no space for
         // a path, so the badge carries it in its tooltip and the pane header
         // spells it out in full.
-        if (session.owns_worktree) {
+        const where = this.worktreeNote(session);
+        if (where) {
           const mark = el('span', 'wt', 'WT');
-          mark.title = `Worktree: ${session.working_dir}`;
+          mark.title = where;
           item.appendChild(mark);
         }
-        item.title = `${session.name}\n${session.agent}`
-          + (session.owns_worktree ? `\n${session.working_dir}` : '');
+        item.title = `${session.name}\n${session.agent}` + (where ? `\n${where}` : '');
         item.addEventListener('click', () => this.handlers.onOpenSession(session));
         list.appendChild(item);
       }

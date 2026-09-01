@@ -78,9 +78,10 @@ function blankState(id) {
     id,
     name: '',
     workingDir: '',
-    // Whether workingDir is a worktree the server created for this session, and
-    // will remove with it. A worktree the user made by hand reads false.
-    ownsWorktree: false,
+    // The worktree this session is attached to, or null when it runs in the
+    // project directory. Not ownership: the worktree is its own resource, may
+    // be shared with other sessions, and outlives this one.
+    worktreeId: null,
     agent: 'claude-code',
     status: 'idle',
     autoApproveWrite: false,
@@ -177,7 +178,7 @@ export class Store {
     Object.assign(shadow, {
       name: live.name,
       workingDir: live.workingDir,
-      ownsWorktree: live.ownsWorktree,
+      worktreeId: live.worktreeId,
       agent: live.agent,
       status: live.status,
       autoApproveWrite: live.autoApproveWrite,
@@ -493,7 +494,7 @@ export function rowText(row) {
 export function toMarkdown(state) {
   const parts = [`# ${state.name || 'Session'}`, ''];
   if (state.workingDir) {
-    const where = state.ownsWorktree ? `\`${state.workingDir}\` (worktree)` : `\`${state.workingDir}\``;
+    const where = state.worktreeId ? `\`${state.workingDir}\` (worktree)` : `\`${state.workingDir}\``;
     parts.push(`${where} · ${state.agent}`, '');
   }
 

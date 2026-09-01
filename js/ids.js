@@ -31,7 +31,24 @@ export const withStringIds = (row, keys) => {
 
 export const asProject = (row) => withStringIds(row, ['id']);
 
-export const asSession = (row) => withStringIds(row, ['id', 'project_id']);
+export const asSession = (row) => withStringIds(row, ['id', 'project_id', 'worktree_id']);
+
+export const asWorktree = (row) => withStringIds(row, ['id', 'project_id']);
+
+/**
+ * The outbound half: an id going back out in a request *body*.
+ *
+ * `worktree_id` on `POST /sessions` is the only one — every other id we send
+ * travels in a URL, where a string is already the right shape. The server types
+ * it `int`, so hand it a number rather than leaning on the framework to coerce
+ * `"1"`. A value that is not an integer is passed through untouched, which is
+ * both the uuid case and the way a null stays a null.
+ */
+export const wireId = (id) => {
+  if (id === null || id === undefined || id === '') return null;
+  const number = Number(id);
+  return Number.isInteger(number) ? number : id;
+};
 
 /** Lift a row mapper over a list response, leaving anything else alone. */
 export const each = (fn) => (rows) => (Array.isArray(rows) ? rows.map(fn) : rows);

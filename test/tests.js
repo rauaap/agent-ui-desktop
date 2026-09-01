@@ -12,11 +12,20 @@
  */
 
 import { ADD, DELETE, MAX_DIFF_LINES, diff } from '../js/render/diff.js';
-import { asProject, asSession, storedIds } from '../js/ids.js';
+import { asProject, asSession, asWorktree, storedIds, wireId } from '../js/ids.js';
 import { toHtml } from '../js/render/markdown.js';
 import { Store, parseComposerInput, reduce, rowText } from '../js/store.js';
 import { toolSummary } from '../js/tools.js';
-import { pathFor, slug } from '../js/worktree.js';
+import {
+  DEFAULT_TEMPLATE,
+  absolutize,
+  baseOf,
+  expand,
+  joinPath,
+  normalize,
+  parentOf,
+  slug,
+} from '../js/worktree.js';
 
 const results = [];
 
@@ -460,7 +469,7 @@ test('reducer: bash rows are searchable by command and by output', () => {
 });
 
 /* ------------------------------------------------------------------ */
-/* worktree seeds                                                     */
+/* worktree paths                                                     */
 /* ------------------------------------------------------------------ */
 
 test('slug: a name becomes a branch-safe token', () => {
@@ -485,14 +494,74 @@ test('slug: a long name is capped without a dangling dash', () => {
   assertTrue(!s.endsWith('-'), 'no trailing dash');
 });
 
-test('worktree path: a sibling of the project directory', () => {
-  assertEqual(pathFor('/home/me/app', 'fix login'), '/home/me/app-fix-login');
-  assertEqual(pathFor('/home/me/app/', 'fix login'), '/home/me/app-fix-login');
+test('normalize: matches what the server stores, lexically', () => {
+  // The server runs os.path.normpath on arrival, so `/projects/app/../app-fix`
+  // comes back as `/projects/app-fix`; a comparison against the spelling we
+  // sent would miss, and miss silently.
+  assertEqual(normalize('/projects/app/../app-fix'), '/projects/app-fix');
+  assertEqual(normalize('/projects//app/'), '/projects/app');
+  assertEqual(normalize('/projects/./app'), '/projects/app');
+  assertEqual(normalize('/..'), '/', 'there is nothing above the root');
 });
 
-test('worktree path: a root project has no segment to suffix', () => {
-  assertEqual(pathFor('/', 'fix login'), '/fix-login');
-  assertEqual(pathFor('', 'fix login'), '/fix-login');
+test('normalize: a relative path stays relative', () => {
+  assertEqual(normalize('app/../app-fix'), 'app-fix');
+  assertEqual(normalize('../sibling'), '../sibling');
+  assertEqual(normalize(''), '');
+});
+
+test('parentOf and baseOf split at the parent, so %P/%N composes', () => {
+  assertEqual(parentOf('/projects/app'), '/projects');
+  assertEqual(baseOf('/projects/app'), 'app');
+  assertEqual(parentOf('/app'), '/', 'a project directly under the root');
+  assertEqual(baseOf('/app'), 'app');
+  assertEqual(joinPath(parentOf('/projects/app'), baseOf('/projects/app')), '/projects/app');
+});
+
+test('joinPath: a project under the root does not produce a double slash', () => {
+  // `%P` is `/` there, and concatenating `%P/%N-%B` would give `//app-fix`. The
+  // server collapses that; our own comparisons would not.
+  assertEqual(joinPath('/', 'app-fix'), '/app-fix');
+});
+
+test('expand: the default template is a sibling of the project directory', () => {
+  assertEqual(expand(DEFAULT_TEMPLATE, '/projects/app', 'fix-login'), '/projects/app-fix-login');
+  assertEqual(expand(DEFAULT_TEMPLATE, '/projects/app/', 'fix-login'), '/projects/app-fix-login');
+  assertEqual(expand(DEFAULT_TEMPLATE, '/app', 'fix'), '/app-fix');
+});
+
+test('expand: %B slugs the branch and %b nests it', () => {
+  // Slashes are legal in branch names and common, so the spelling people reach
+  // for is the one that stays beside the project.
+  assertEqual(expand('%P/%N-%B', '/projects/app', 'feature/fix'), '/projects/app-feature-fix');
+  assertEqual(expand('%P/%N-%b', '/projects/app', 'feature/fix'), '/projects/app-feature/fix');
+});
+
+test('expand: %P and %N compose into a gathered layout', () => {
+  assertEqual(
+    expand('%P/worktrees/%N-%B', '/projects/app', 'fix'),
+    '/projects/worktrees/app-fix',
+  );
+  assertEqual(expand('%P/%N', '/projects/app', 'fix'), '/projects/app');
+});
+
+test('expand: a relative template is anchored on the project directory', () => {
+  assertEqual(expand('../%N-%B', '/projects/app', 'fix'), '/projects/app-fix');
+  assertEqual(expand('trees/%B', '/projects/app', 'fix'), '/projects/app/trees/fix');
+});
+
+test('expand: an empty template falls back to the default', () => {
+  assertEqual(expand('', '/projects/app', 'fix'), '/projects/app-fix');
+});
+
+test('expand: %% is a literal percent', () => {
+  assertEqual(expand('%P/%%-%B', '/projects/app', 'fix'), '/projects/%-fix');
+});
+
+test('absolutize: a hand-typed relative path resolves against the project', () => {
+  assertEqual(absolutize('../app-fix', '/projects/app'), '/projects/app-fix');
+  assertEqual(absolutize('/elsewhere/app-fix', '/projects/app'), '/elsewhere/app-fix');
+  assertEqual(absolutize('', '/projects/app'), '/projects/app');
 });
 
 /* ------------------------------------------------------------------ */
@@ -504,6 +573,27 @@ test('ids: a numeric session id becomes a string, with its project link', () => 
   assertEqual(session.id, '12');
   assertEqual(session.project_id, '3');
   assertEqual(session.name, 'work', 'everything else is left alone');
+});
+
+test('ids: a session carries its worktree link through the same door', () => {
+  assertEqual(asSession({ id: 12, worktree_id: 1 }).worktree_id, '1');
+  assertEqual(asSession({ id: 12, worktree_id: null }).worktree_id, null,
+    'null means the session runs in the project directory, and stays null');
+});
+
+test('ids: a worktree row coerces its own id and its project link', () => {
+  const worktree = asWorktree({ id: 1, project_id: 2, path: '/projects/app-fix', branch: null });
+  assertEqual(worktree.id, '1');
+  assertEqual(worktree.project_id, '2');
+  assertEqual(worktree.branch, null, 'a migrated worktree has no branch, and keeps none');
+});
+
+test('ids: an id going back out in a body is a number again', () => {
+  // `worktree_id` on POST /sessions is typed int server-side.
+  assertEqual(wireId('1'), 1);
+  assertEqual(wireId(null), null);
+  assertEqual(wireId(''), null, 'the picker’s "project directory" entry');
+  assertEqual(wireId('a3f1-9c'), 'a3f1-9c', 'a uuid is not arithmetic to attempt');
 });
 
 test('ids: a uuid from an old server passes through untouched', () => {

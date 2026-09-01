@@ -47,16 +47,23 @@ headers, so this only works if you add them — the supported path is `WEB_ROOT`
   two are independent.
 - **Project settings** — the ⚙ on a project row opens what the server knows
   about it: directory, session count (and how many run in a worktree), last
-  activity, and whether it is a git repo. Both whole-project actions live there
-  — new session, and forgetting the project, which removes it and its sessions
-  but **never touches the disk**.
-- **Worktree sessions** — for a project that is a git repo, a new session can
-  get its own `git worktree` on a new branch, so two agents can work on the same
-  project without fighting over one checkout. The directory and the branch are
-  seeded from the session name and editable. Worktree sessions are tagged in the
-  tree and their directory is spelled out in the pane header; deleting one
-  removes the worktree, unless git refuses because it still holds uncommitted or
-  untracked work.
+  activity, whether it is a git repo, and its worktrees. Every whole-project
+  action lives there — new session, new worktree, removing a worktree, and
+  forgetting the project, which removes it, its sessions and its worktrees but
+  **never touches the project's own directory**.
+- **Worktrees** — a worktree is its own thing, not something a session owns: it
+  is created on its own, several sessions can share one, and it outlives the
+  sessions that used it. The new-session dialog picks one — "project directory"
+  by default, any existing worktree, or "New worktree…" — and sessions running
+  in one are tagged in the tree with their directory spelled out in the pane
+  header. Removing a worktree is never forced; git counts untracked files as
+  dirty, so one an agent did real work in is left in place and said so.
+- **Worktree path template** — the ⚙ in the sidebar header holds the template
+  new worktree paths are seeded from: `%P` the project's parent directory, `%N`
+  the project directory's name, `%B` the branch with slashes turned to dashes,
+  `%b` the branch verbatim. The default `%P/%N-%B` puts `/projects/app` on
+  branch `fix-login` at `/projects/app-fix-login`. The seeded path follows the
+  branch field until you edit it, and a Reset button leashes it again.
 - **Session tabs** — several sessions open at once, each with its own live
   WebSocket. The tab's status dot shows idle / running / needs-you at a glance.
   Open tabs are restored on reload.
@@ -93,7 +100,7 @@ js/
   dialogs.js          native <dialog> forms for CRUD and settings
   notify.js           Notification API + "don't shout about what's on screen"
   names.js            adjective-noun session-name suggestions
-  worktree.js         session name -> worktree directory and branch seed
+  worktree.js         the path template, and the path arithmetic it needs
   app.js              bootstrap and wiring
   render/
     markdown.js       markdown subset -> HTML (port of Markdown.java)
@@ -190,7 +197,8 @@ It takes every session in the project and their transcripts with it, which is
 more than belongs on one click on a row you were probably only trying to expand
 — and deleting a *session* was never a one-click affordance in the tree either.
 It still asks a second time, and still reports any worktree git declined to
-remove.
+remove. It is also where worktrees are managed, because a worktree belongs to a
+project and to nothing smaller.
 
 ### A worktree session belongs to its project, not to its directory
 
@@ -201,25 +209,58 @@ that rule would drop it out of the very project it was created in. Grouping is
 enough not to send an id — which is also a server old enough to have no
 worktrees.
 
-Creating the worktree is part of `POST /sessions`, not a call the client makes
-first: with two requests, a browser tab closed in between would leave a worktree
-on disk that no session claims and nothing will ever clean up. So a worktree
-that cannot be created is a 400 with git's own words in it, the dialog stays
-open, and no session exists.
+### A worktree is a resource, not a session's property
 
-Removal is never forced, and **git counts untracked files as dirty** — an agent
-that created so much as one new file leaves a tree git will refuse to remove. So
-"the worktree was left in place" is the *common* outcome of deleting a session
-that did any work, not an edge case, and it is phrased as a notice with git's
-message in it rather than as an error. The session is deleted either way.
+It used to be created inside `POST /sessions` and destroyed with the session
+that made it. It is now `POST /worktrees`, `GET /worktrees`,
+`DELETE /worktrees/{id}`, and a `worktree_id` on the session — null for one
+running in the project directory.
+
+That turns three UI decisions:
+
+- The new-session dialog offers a **picker**, not a toggle and two text fields.
+  The question is no longer "should this session get a worktree" but "which of
+  the project's checkouts does it run in", with `session_count` shown flatly
+  because sharing one is a supported arrangement rather than a warning.
+- Deleting a session touches nothing on disk. Where the old flow reported what
+  it did to the worktree, the new one says the worktree is still there when the
+  last session on it goes — a note, not a nudge, because finishing a session
+  does not mean finishing with the branch.
+- Removing a worktree is its own action, in project settings. Removal is never
+  forced and **git counts untracked files as dirty**, so one an agent did real
+  work in refuses: the *common* path, phrased as information. git's own
+  suggestion to `--force` it is not passed on, because the server takes no force
+  flag and the fix is in the worktree.
+
+### The path is the client's problem
+
+The server takes an absolute path and normalises it lexically. It has no notion
+of a path relative to a project and no template syntax, so `worktree.js` owns
+all of it: the token expansion, and enough path arithmetic — `normalize`,
+`parentOf`, `baseOf`, `joinPath` — to get the same spelling the server stores.
+
+That last part is what the arithmetic is *for*. A path built by concatenation
+gives `//app-fix` for a project directly under the root, and the server tidies
+that away; our own later comparison against `GET /worktrees` does not. Since the
+whole collision story — "you already have a worktree here, use that one" — runs
+on matching paths, a comparison that misses is a `409` the user has to read
+their way out of instead.
+
+Two things the client deliberately does not decide. **The project's current
+HEAD**: worktrees are always cut from it, but nothing exposes what it is, so the
+copy says "the project's current HEAD" and not "`main`". **Whether a branch name
+is legal**: that is `git check-ref-format`, run server-side. The create form
+sends while it is still open so git's answer lands under the branch field — a
+regex here would only approximate git's rules, and reject names git accepts.
 
 ### An id is a number on the wire and a string here
 
-`projects.id` and `sessions.id` are JSON numbers; they were uuid strings until
-the server renumbered its rows. Above `api.js` they are strings, because that is
-what `dataset`, `localStorage` and a URL turn them into regardless — so the
-conversion happens once, in `ids.js`, at the door they come in through rather
-than at each of the dozen places they are compared.
+`projects.id`, `sessions.id` and `worktrees.id` are JSON numbers; they were uuid
+strings until the server renumbered its rows. Above `api.js` they are strings,
+because that is what `dataset`, `localStorage`, a `<select>`'s value and a URL
+turn them into regardless — so the conversion happens once, in `ids.js`, at the
+door they come in through rather than at each of the dozen places they are
+compared.
 
 That is worth a section because the alternative fails *quietly*. `1 === "1"` is
 `false` and `new Set([1]).has("1")` is `false`, so an id that keeps its wire type
@@ -228,9 +269,15 @@ status dots stop updating, and restored tabs silently never open. Nothing about
 `String(s.id)` is defensive noise; it is the only thing standing between those
 features and a no-op.
 
-An id is identity, never arithmetic: nothing here parses one back to a number,
-orders two, or slices one — that last was a uuid-era habit and would now throw
-on a number. `request_id` and an approval option's `id` are minted by the agent
+There is one door back out. `worktree_id` on `POST /sessions` is the only id
+this client sends in a request *body* rather than in a URL, and the server types
+it `int`, so `ids.js` converts it there too rather than leaving the framework to
+guess about `"1"`. Everything else stays a string, because a number stringifies
+predictably into a path and `` `/sessions/${id}` `` needs no help.
+
+Otherwise an id is identity, never arithmetic: nothing here parses one to order
+two, or slices one — that last was a uuid-era habit and would now throw on a
+number. `request_id` and an approval option's `id` are minted by the agent
 or the approval protocol, are strings already, and are left alone. Ids saved
 before the renumbering need no migration: the restore path checks each against
 the current session list and drops what it does not find, so a stale list
@@ -238,9 +285,9 @@ corrects itself after one run.
 
 ## Tests
 
-The pure modules — the diff, the markdown parser, the reducer, the worktree
-seeds, the id coercion — have unit tests, most ported from the Android client's
-`LineDiffTest`, `MarkdownTest` and `WorktreeTest`:
+The pure modules — the diff, the markdown parser, the reducer, the worktree path
+template, the id coercion — have unit tests, most ported from the Android
+client's `LineDiffTest`, `MarkdownTest` and `WorktreeTest`:
 
 ```sh
 node test/run.js          # any JS runtime
