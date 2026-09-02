@@ -84,6 +84,10 @@ function blankState(id) {
     worktreeId: null,
     agent: 'claude-code',
     status: 'idle',
+    // When the server filed this session away, or null while it is live.
+    // Server state like `status`, and arriving the same way: on connect, and
+    // again whenever any device changes it.
+    archivedAt: null,
     autoApproveWrite: false,
     autoApproveCommand: false,
     connected: false,
@@ -181,6 +185,7 @@ export class Store {
       worktreeId: live.worktreeId,
       agent: live.agent,
       status: live.status,
+      archivedAt: live.archivedAt,
       autoApproveWrite: live.autoApproveWrite,
       autoApproveCommand: live.autoApproveCommand,
       nextKey: live.nextKey,
@@ -291,6 +296,15 @@ export function reduce(state, event) {
 
     case 'renamed':
       if (event.name) state.name = event.name;
+      changes.push({ op: 'meta' });
+      break;
+
+    // Filed away, or brought back — by this client, by another device, or by a
+    // project archive that swept this session up. Sent on connect too, right
+    // after the status event, so it is authoritative rather than a delta: no
+    // toggling, just take what it says.
+    case 'archived':
+      state.archivedAt = event.archived_at ?? null;
       changes.push({ op: 'meta' });
       break;
 

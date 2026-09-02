@@ -150,7 +150,11 @@ input, textarea {
  * menu nobody can find is the problem this is fixing, and hover is not a
  * gesture a touchscreen has. It brightens with the row rather than announcing
  * itself over the project name. */
-.project .gear {
+/* Also the unarchive control the archive puts on both kinds of row: same size,
+ * same reticence, since it is the same class of thing — a control on a row that
+ * is itself a button. */
+.project .gear,
+.session .gear {
   flex: none;
   padding: 0 3px;
   border-radius: var(--radius);
@@ -159,8 +163,9 @@ input, textarea {
   opacity: 0.55;
 }
 
-.project:hover .gear { opacity: 1; }
-.project .gear:hover { color: var(--ink); background: var(--panel-hover); }
+.project:hover .gear,
+.session:hover .gear { opacity: 1; }
+.gear:hover { color: var(--ink); background: var(--panel-hover); }
 
 /* "the directory this row describes is not on disk" — a project's, or a
  * worktree's in the project settings list. */
@@ -246,6 +251,75 @@ input, textarea {
 }
 
 .add-row:hover { background: var(--panel-hover); color: var(--accent-strong); }
+
+/* "3 archived" beside a live project's session count — a link into the archive,
+ * kept visibly apart from the count itself because the server keeps the two
+ * numbers apart and folding them together would overstate what is live. */
+.archived-count {
+  flex: none;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--faint);
+}
+
+.archived-count:hover { color: var(--info); border-color: var(--info-line); }
+
+/* ------------------------------------------------------------------ */
+/* the archive                                                        */
+/* ------------------------------------------------------------------ */
+
+/* Archived sessions keep the project -> session shape of the tree above,
+ * because that is still where a session is: filed, not moved. What separates
+ * the two is register — a rule, a caption, and rows a shade quieter — rather
+ * than a second layout to learn. */
+.tree-section {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  margin-top: 10px;
+  padding: 10px 8px 7px;
+  border-top: 1px solid var(--line-soft);
+  text-align: left;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.tree-section:hover { color: var(--muted); }
+
+.tree-section .twisty {
+  width: 12px;
+  font-size: 10px;
+  letter-spacing: 0;
+  transition: transform 0.12s ease;
+}
+
+.tree-section.open .twisty { transform: rotate(90deg); }
+
+.tree-section .pname {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project.archived,
+.session.archived { color: var(--faint); }
+
+.project.archived:hover,
+.session.archived:hover { color: var(--muted); }
+
+/* An archived session that is open in a tab is still the active one, and the
+ * highlight has to beat the dimming above. */
+.session.archived.active { color: var(--ink); }
 
 /* ------------------------------------------------------------------ */
 /* main / tabs                                                        */
@@ -417,6 +491,9 @@ input, textarea {
 .pill.running { color: var(--running); border-color: rgba(78, 207, 158, 0.4); }
 .pill.awaiting_approval { color: var(--awaiting); border-color: rgba(232, 177, 76, 0.4); }
 .pill.offline { color: var(--danger); border-color: var(--danger-line); }
+/* Filed away, which is a state of the session rather than a problem with it —
+ * so the informational blue the worktree badge uses, not the danger red. */
+.pill.archived { color: var(--info); border-color: var(--info-line); background: var(--info-soft); }
 
 .icon-btn {
   flex: none;
@@ -872,6 +949,23 @@ input, textarea {
 /* ------------------------------------------------------------------ */
 /* composer                                                           */
 /* ------------------------------------------------------------------ */
+
+/* Why the composer below is dead, and the way out. Sits between the transcript
+ * and the composer, and is `flex: none` for the same reason the composer is:
+ * the transcript gives up the space, since the notice is the only thing that
+ * explains the box under it. */
+.archive-notice {
+  display: flex;
+  align-items: center;
+  flex: none;
+  gap: 12px;
+  padding: 10px 20px;
+  border-top: 1px solid var(--line-soft);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.archive-notice .btn { flex: none; }
 
 /* flex: none — the composer keeps its height and the transcript above it gives
  * up the space. It is the one thing on screen that must always be reachable. */

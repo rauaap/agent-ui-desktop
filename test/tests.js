@@ -12,6 +12,7 @@
  */
 
 import { agentName, defaultAgent, normalizeAgents } from '../js/agents.js';
+import { byArchivedAt, filedAt, isArchived, partition } from '../js/archive.js';
 import { ADD, DELETE, MAX_DIFF_LINES, diff } from '../js/render/diff.js';
 import { asProject, asSession, asWorktree, storedIds, wireId } from '../js/ids.js';
 import { toHtml } from '../js/render/markdown.js';
@@ -222,6 +223,7 @@ const freshState = () => ({
   workingDir: '',
   agent: 'claude-code',
   status: 'idle',
+  archivedAt: null,
   autoApproveWrite: false,
   autoApproveCommand: false,
   connected: false,
@@ -680,6 +682,89 @@ test('agents: an id we were not told about shows as itself', () => {
   assertEqual(agentName(agents, 'opencode'), 'OpenCode');
   assertEqual(agentName(agents, 'codex'), 'codex', 'a session started under an agent since gone');
   assertEqual(agentName([], 'pi'), 'pi');
+});
+
+/* ------------------------------------------------------------------ */
+/* archive                                                            */
+/* ------------------------------------------------------------------ */
+
+const at = (id, archived_at = null) => ({ id, archived_at });
+
+test('archive: a row is archived when the server has stamped it', () => {
+  assertTrue(!isArchived(at('a')), 'null is live');
+  assertTrue(isArchived(at('a', '2026-08-26T11:02:00Z')));
+  assertTrue(!isArchived(undefined), 'a missing row is not archived');
+});
+
+test('archive: partition splits on archived_at, keeping server order', () => {
+  const rows = [at('a'), at('b', '2026-08-01T00:00:00Z'), at('c'), at('d', '2026-08-02T00:00:00Z')];
+  const { live, archived } = partition(rows);
+  assertEqual(live.map((s) => s.id).join(''), 'ac');
+  assertEqual(archived.map((s) => s.id).join(''), 'bd');
+});
+
+test('archive: byArchivedAt puts the most recently filed first', () => {
+  const rows = [
+    at('older', '2026-08-01T09:00:00Z'),
+    at('newest', '2026-08-26T11:02:00Z'),
+    at('middle', '2026-08-14T22:30:00Z'),
+  ];
+  assertEqual(byArchivedAt(rows).map((r) => r.id).join(' '), 'newest middle older');
+});
+
+test('archive: byArchivedAt does not disturb the list it was given', () => {
+  const rows = [at('a', '2026-08-01T00:00:00Z'), at('b', '2026-08-09T00:00:00Z')];
+  byArchivedAt(rows);
+  assertEqual(rows.map((r) => r.id).join(''), 'ab', 'sorted a copy');
+});
+
+test('archive: a row with no timestamp sorts last rather than first', () => {
+  const rows = [at('none'), at('filed', '2026-08-01T00:00:00Z')];
+  assertEqual(byArchivedAt(rows).map((r) => r.id).join(' '), 'filed none');
+});
+
+test('archive: an archived project is filed at its own timestamp', () => {
+  const project = at('p', '2026-08-26T11:02:00Z');
+  // The cascade stamps its sessions at the same moment, but a session archived
+  // by hand beforehand carries an older one; the project's own stamp wins.
+  const sessions = [at('s1', '2026-08-26T11:02:00Z'), at('s2', '2026-07-01T00:00:00Z')];
+  assertEqual(filedAt(project, sessions), '2026-08-26T11:02:00Z');
+});
+
+test('archive: a live project is filed at its newest archived session', () => {
+  const sessions = [at('s1', '2026-07-01T00:00:00Z'), at('s2', '2026-08-14T22:30:00Z')];
+  assertEqual(filedAt(at('p'), sessions), '2026-08-14T22:30:00Z');
+  assertEqual(filedAt(at('p'), []), null, 'nothing filed, nothing to date');
+});
+
+test('reducer: an archived event files the session away and brings it back', () => {
+  const s = feed(freshState(),
+    { type: 'archived', archived_at: '2026-08-26T11:02:00Z' },
+  );
+  assertEqual(s.archivedAt, '2026-08-26T11:02:00Z');
+  reduce(s, { type: 'archived', archived_at: null });
+  assertEqual(s.archivedAt, null, 'null brings it back');
+});
+
+test('reducer: an archived event is authoritative, not a toggle', () => {
+  const s = feed(freshState(),
+    { type: 'archived', archived_at: '2026-08-26T11:02:00Z' },
+    // Sent again on every reconnect; receiving it twice must not undo it.
+    { type: 'archived', archived_at: '2026-08-26T11:02:00Z' },
+  );
+  assertEqual(s.archivedAt, '2026-08-26T11:02:00Z');
+});
+
+test('store: a reconnect replay keeps the session archived', () => {
+  const store = new Store();
+  store.apply('s', { type: 'archived', archived_at: '2026-08-26T11:02:00Z' });
+  store.beginReplay('s');
+  // A replay carries scrollback and a trailing status, not the metadata the
+  // session already had — which the shadow state has to bring across itself.
+  store.apply('s', { type: 'output', text: 'hi' });
+  store.apply('s', { type: 'status', status: 'idle' });
+  store.commitReplay('s');
+  assertEqual(store.session('s').archivedAt, '2026-08-26T11:02:00Z');
 });
 
 export { results };

@@ -83,6 +83,13 @@ headers, so this only works if you add them — the supported path is `WEB_ROOT`
 - **Bash mode** — a message starting with `!` runs as a shell command in the
   session's working directory instead of going to the agent. `\!` sends a prompt
   that really does start with an exclamation mark.
+- **Archive** — file a session you are done with under **Archived** in the
+  sidebar, from its settings; a project's settings archive the project and every
+  session in it in one call. The archive has the same project → session shape as
+  the tree above it, ordered by when things were filed. Archived sessions stay
+  open-able and readable — only new prompts and commands are refused — and
+  nothing is deleted. The state is the server's, so it is the same on every
+  device and arrives live over the WebSocket.
 - **Search and export** — filter and highlight within a transcript, or export
   the whole session as markdown.
 
@@ -99,7 +106,8 @@ js/
   socket.js           one WebSocket per open session: backoff + buffered replay
   store.js            per-session state and the transcript reducer — no DOM
   tools.js            pure helpers over tool_use payloads
-  sidebar.js          the project/session tree
+  sidebar.js          the project/session tree, and the archive below it
+  archive.js          reading `archived_at`: split, order, label — no DOM
   tabs.js             tab strip and pane lifecycle
   pane.js             one session: header, transcript, composer
   dialogs.js          native <dialog> forms for CRUD and settings
@@ -311,11 +319,62 @@ before the renumbering need no migration: the restore path checks each against
 the current session list and drops what it does not find, so a stale list
 corrects itself after one run.
 
+### The archive is server state the client only sorts
+
+`archived_at` is a nullable timestamp on both a project row and a session row:
+null is live, an ISO 8601 UTC string is when it was filed. Neither list endpoint
+filters — `GET /projects` and `GET /sessions` return everything with the field
+attached — so splitting the tree from the archive is entirely this client's job,
+and `archive.js` is that job with no DOM and no state of its own.
+
+Two rules fall out of the server's shape and are easy to get wrong:
+
+- **Do not reuse the server's order for the archive.** `GET /projects` sorts by
+  `last_active_at` descending, and an archived project's `last_active_at` is
+  always null, so the whole archive arrives heaped at the end in no useful
+  sequence. The archive sorts itself by `archived_at` descending instead — for a
+  live project holding archived sessions, by the newest of those sessions, since
+  that is when it acquired a row down there at all.
+- **Archived and live session counts stay apart.** A live project's count is its
+  live sessions; anything filed away sits beside it as a separate `3 archived`
+  badge that opens the archive at that project. Folding them together would
+  overstate what is actually running.
+
+Archiving a project is one `PATCH /projects` that cascades server-side, so the
+confirmation names the number of sessions going with it. Unarchiving restores
+only what that cascade took — a session filed by hand beforehand stays filed —
+which is why the toast reports the server's `sessions_affected` rather than a
+count guessed here. Unarchiving a *session* silently unarchives its project too
+(a live session under an archived project would have nowhere to show), so it
+refetches both lists rather than patching one row.
+
+A busy session cannot be archived. The archive controls are disabled when one is
+running and the project dialog names the offenders, but that guard is not
+sufficient and the `409` path is not optional: a shell command leaves a session
+`idle` while still counting as busy server-side, so a session can look archivable
+here and be refused. A refused project archive writes nothing at all, so there is
+no partial state to unpick.
+
+An archived session still opens, still connects, still replays its scrollback —
+keeping old work readable is the point. What closes is the composer, with the
+reason and an Unarchive button in place of it, because the server refuses both
+prompts and `!` commands with `409 Session is archived`. For the same reason an
+archived project's settings drop **New session** and **New worktree** rather
+than offering a `409`, and the tree stops offering them too.
+
+Two things archiving deliberately does *not* do, both stated in the dialogs
+rather than left to be found out. It does not protect anything from deletion:
+forgetting a project still takes its archived sessions with it. And it does not
+sweep up worktrees — they carry no archive flag, they hold real uncommitted
+work, and the only thing that removes one is the worktree list in project
+settings.
+
 ## Tests
 
 The pure modules — the diff, the markdown parser, the reducer, the worktree path
-template, the id coercion, the agent list — have unit tests, most ported from
-the Android client's `LineDiffTest`, `MarkdownTest` and `WorktreeTest`:
+template, the id coercion, the agent list, and the archive's split and ordering
+— have unit tests, most ported from the Android client's `LineDiffTest`,
+`MarkdownTest` and `WorktreeTest`:
 
 ```sh
 node test/run.js          # any JS runtime

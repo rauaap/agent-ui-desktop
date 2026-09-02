@@ -7,7 +7,8 @@
  */
 
 import * as api from './api.js';
-import { Store } from './store.js';
+import { partition } from './archive.js';
+import { Store, isBusy } from './store.js';
 import { Sidebar, belongsTo } from './sidebar.js';
 import { Workspace } from './tabs.js';
 import { Notifier } from './notify.js';
@@ -64,11 +65,21 @@ const workspace = new Workspace(
   {
     onSettings: openSessionSettings,
     onStop: stopSession,
+    onUnarchive: (id) => setSessionArchived(id, false),
     onError: (message) => toast(message, true),
     onLiveEvent: (id, event) => {
       notifier.observe(id, event);
       // A turn ending or a rename changes what the tree should show.
       if (event.type === 'status' || event.type === 'renamed') sidebar.refreshStatuses();
+      // Archiving moves a row between the two halves of the tree, which the
+      // dots-only repaint cannot do — and this event is how an archive
+      // performed on another device reaches us at all. The server also sends it
+      // on connect, so it is only news when it disagrees with the last refresh;
+      // otherwise opening a tab would refetch both lists for nothing.
+      if (event.type === 'archived'
+          && (event.archived_at ?? null) !== (sessionsById.get(id)?.archived_at ?? null)) {
+        refresh();
+      }
     },
     onActiveChange: (id) => {
       notifier.setActive(id);
@@ -84,6 +95,8 @@ const sidebar = new Sidebar(document.getElementById('tree'), store, {
   },
   onNewSession: createSession,
   onProjectSettings: openProjectSettings,
+  onUnarchiveProject: (project) => setProjectArchived(project, false),
+  onUnarchiveSession: (session) => setSessionArchived(session.id, false),
 });
 
 notifier.onActivate = (id) => {
@@ -111,6 +124,7 @@ const metaFrom = (session) => ({
   worktreeId: session.worktree_id ?? null,
   agent: session.agent,
   status: session.status,
+  archivedAt: session.archived_at ?? null,
   autoApproveWrite: !!session.auto_approve_write,
   autoApproveCommand: !!session.auto_approve_command,
 });
@@ -193,20 +207,25 @@ async function createProject() {
 }
 
 /**
- * Project settings. The dialog itself changes nothing about the project — the
- * server has no route that updates one — so it reports what `GET /projects`
- * says, lists the project's worktrees, and hands back whichever action was
- * chosen, all of which already live here.
+ * Project settings. The dialog itself changes nothing about the project beyond
+ * archiving it — the server has no other route that updates one — so it reports
+ * what `GET /projects` says, lists the project's worktrees, and hands back
+ * whichever action was chosen, all of which already live here.
  *
  * A loop rather than one shot, because managing worktrees is the one thing here
  * you do more than once: removing one drops you back into the list, refreshed.
  */
 async function openProjectSettings(project) {
   for (let current = project; current;) {
+    const sessions = sessionsFor(current);
     const result = await projectSettingsDialog(
       current,
-      sessionsFor(current),
+      sessions,
       worktreesFor(current),
+      // Named in the dialog so the refusal is visible before the button rather
+      // than after it. Not a substitute for handling the 409: a session running
+      // a shell command stays `idle` here and is busy to the server.
+      partition(sessions).live.filter((s) => isBusy(statusOf(s))),
     );
     if (result?.action === 'forget') {
       await forgetProject(current);
@@ -214,6 +233,12 @@ async function openProjectSettings(project) {
     }
     if (result?.action === 'session') {
       await createSession(current);
+      return;
+    }
+    // Archiving a project is the gesture for being done with it, so it closes
+    // the dialog rather than reopening it over a tree the project has just left.
+    if (result?.action === 'archive' || result?.action === 'unarchive') {
+      await setProjectArchived(current, result.action === 'archive');
       return;
     }
     if (result?.action === 'worktree-new') await createWorktreeFor(current, '');
@@ -225,9 +250,57 @@ async function openProjectSettings(project) {
   }
 }
 
+/**
+ * Archive or unarchive a whole project. One call: the server cascades to the
+ * sessions, and a 409 means it wrote nothing at all — including for the idle
+ * sessions — so there is no partial state to reconcile, just a refresh.
+ */
+async function setProjectArchived(project, archived) {
+  try {
+    const result = await api.setProjectArchived(project.path, archived);
+    await refresh();
+    // `sessions_affected` is the server's own count of what moved, which is not
+    // the same as how many sessions the project has: unarchiving restores only
+    // what this project's archive swept up, leaving anything filed by hand.
+    const moved = result?.sessions_affected ?? 0;
+    toast(`${archived ? 'Archived' : 'Unarchived'} ${project.name || project.path}`
+      + (moved ? ` and ${moved} session${moved === 1 ? '' : 's'}` : ''));
+  } catch (error) {
+    fail(error);
+  }
+}
+
+/**
+ * Archive or unarchive one session.
+ *
+ * Unarchiving one silently unarchives its project too, when that project was
+ * archived — so both lists are stale afterwards and this refetches rather than
+ * patching the tree in place.
+ */
+async function setSessionArchived(id, archived) {
+  try {
+    await api.setSessionArchived(id, archived);
+    await refresh();
+    toast(archived ? 'Session archived' : 'Session unarchived');
+  } catch (error) {
+    fail(error);
+  }
+}
+
+/** The live status if the session is open, else the last one the list gave. */
+const statusOf = (session) => (store.has(session.id)
+  ? store.session(session.id).status
+  : session.status || 'idle');
+
 async function forgetProject(project) {
   const sessions = sessionsFor(project);
-  if (!(await forgetProjectDialog(project, sessions.length, worktreesFor(project).length))) return;
+  const confirmed = await forgetProjectDialog(
+    project,
+    sessions.length,
+    worktreesFor(project).length,
+    partition(sessions).archived.length,
+  );
+  if (!confirmed) return;
   try {
     const result = await api.deleteProject(project.path);
     await refresh();
@@ -406,7 +479,12 @@ async function stopSession(id) {
 
 async function openSessionSettings(id) {
   const state = store.session(id);
-  const before = { name: state.name, write: state.autoApproveWrite, command: state.autoApproveCommand };
+  const before = {
+    name: state.name,
+    write: state.autoApproveWrite,
+    command: state.autoApproveCommand,
+    archived: !!state.archivedAt,
+  };
   const result = await sessionSettingsDialog(state);
   if (!result) return;
 
@@ -449,12 +527,21 @@ async function openSessionSettings(id) {
         || result.autoApproveCommand !== before.command) {
       await api.setAutoApprove(id, result.autoApproveWrite, result.autoApproveCommand);
     }
-    // The server broadcasts `renamed` and `settings` to every subscriber, so the
-    // store updates itself; refresh only the tree, which has no socket.
-    await refresh();
+    // Last, and on its own: it is the one field here that can be refused (409
+    // while the session is busy), and a refusal should not also lose the rename
+    // typed beside it. Unarchiving may take the project with it, which is why
+    // the refresh below reloads both lists.
+    if (result.archived !== before.archived) {
+      await api.setSessionArchived(id, result.archived);
+    }
   } catch (error) {
     fail(error);
   }
+  // The server broadcasts `renamed`, `settings` and `archived` to every
+  // subscriber, so the store updates itself; this is for the tree, which has no
+  // socket. In the `finally` position because a rejected archive still leaves
+  // whatever was applied before it to be shown.
+  await refresh();
 }
 
 /* ------------------------------------------------------------------ */

@@ -7,6 +7,7 @@
  * construction.
  */
 
+import { filedLabel } from './archive.js';
 import { isBusy, parseComposerInput, toMarkdown } from './store.js';
 import { SessionSocket } from './socket.js';
 import { TranscriptView } from './render/transcript.js';
@@ -28,7 +29,7 @@ export class SessionPane {
   /**
    * @param {string} sessionId
    * @param {import('./store.js').Store} store
-   * @param {{onSettings: Function, onError: Function}} handlers
+   * @param {{onSettings: Function, onError: Function, onUnarchive: Function}} handlers
    */
   constructor(sessionId, store, handlers) {
     this.id = sessionId;
@@ -55,6 +56,8 @@ export class SessionPane {
       },
     });
     this.root.appendChild(this.transcript.wrap);
+    this.archiveNotice = this.buildArchiveNotice();
+    this.root.appendChild(this.archiveNotice);
     this.root.appendChild(this.buildComposer());
 
     // Zoom and window resizes change the composer's viewport-relative growth
@@ -101,6 +104,11 @@ export class SessionPane {
     });
     head.append(this.searchBox, this.searchCount);
 
+    // Kept beside the status rather than instead of it: an archived session is
+    // still idle or still connected, and the two say different things.
+    this.archivedPill = el('span', 'pill archived', 'Archived');
+    head.appendChild(this.archivedPill);
+
     this.statusPill = el('span', 'pill');
     head.appendChild(this.statusPill);
 
@@ -121,6 +129,23 @@ export class SessionPane {
     head.appendChild(settings);
 
     return head;
+  }
+
+  /**
+   * Why the composer is closed, and the way out of it. Reading an archived
+   * session is the whole point of the archive, so the transcript above is
+   * untouched — only starting new work is refused, and the server refuses it
+   * too (`409 Session is archived`).
+   */
+  buildArchiveNotice() {
+    const notice = el('div', 'archive-notice');
+    notice.appendChild(el('span', null,
+      'This session is archived. Unarchive it to continue working in it.'));
+    const unarchive = el('button', 'btn', 'Unarchive');
+    unarchive.addEventListener('click', () => this.handlers.onUnarchive?.(this.id));
+    notice.appendChild(unarchive);
+    notice.style.display = 'none';
+    return notice;
   }
 
   buildComposer() {
@@ -176,6 +201,15 @@ export class SessionPane {
     const parsed = parseComposerInput(this.input.value);
     if (!parsed) return;
 
+    // The box is disabled while archived, so this is for the race: the event
+    // that archived the session — from another device, or from a project
+    // archive — can land between the keystroke and the send. Prompts *and*
+    // commands are refused; bash is outside the turn lock, not outside this.
+    if (this.store.session(this.id).archivedAt) {
+      this.handlers.onError('This session is archived — unarchive it to send anything');
+      return;
+    }
+
     if (parsed.kind === 'bash') {
       // Nothing typed after the `!` yet.
       if (!parsed.command) return;
@@ -220,19 +254,28 @@ export class SessionPane {
       ? 'Reconnecting…'
       : STATUS_LABEL[state.status] || state.status;
 
+    const archived = !!state.archivedAt;
+    this.archivedPill.style.display = archived ? '' : 'none';
+    this.archivedPill.title = archived ? `Archived ${filedLabel(state.archivedAt)}` : '';
+    this.archiveNotice.style.display = archived ? '' : 'none';
+
     const busy = isBusy(state.status);
-    // Only connectivity closes the composer. A busy agent no longer does:
-    // `!` commands bypass the turn entirely, and a prompt sent mid-turn is
-    // turned away in send() with a toast, which says more than a dead box.
-    this.input.disabled = offline;
-    this.sendButton.disabled = offline;
-    this.input.placeholder = offline
-      ? 'Reconnecting…'
-      : state.status === 'awaiting_approval'
-        ? 'Answer above, or ! to run a command…'
-        : busy
-          ? 'The agent is working — ! runs a command…'
-          : 'Send a prompt, or ! to run a command…';
+    // Connectivity closes the composer, and so does the archive — the server
+    // refuses both a prompt and a command in an archived session, and a dead
+    // box with a notice above it says that better than a rejected send. A busy
+    // agent still does not: `!` commands bypass the turn entirely, and a prompt
+    // sent mid-turn is turned away in send() with a toast.
+    this.input.disabled = offline || archived;
+    this.sendButton.disabled = offline || archived;
+    this.input.placeholder = archived
+      ? 'Archived — unarchive to send prompts or commands'
+      : offline
+        ? 'Reconnecting…'
+        : state.status === 'awaiting_approval'
+          ? 'Answer above, or ! to run a command…'
+          : busy
+            ? 'The agent is working — ! runs a command…'
+            : 'Send a prompt, or ! to run a command…';
     this.stopButton.style.display = busy ? '' : 'none';
   }
 
