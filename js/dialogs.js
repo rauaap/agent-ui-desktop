@@ -500,7 +500,7 @@ export function forgetProjectDialog(project, sessionCount, worktreeCount = 0) {
 /* ------------------------------------------------------------------ */
 
 /** The "New worktree…" entry's value. Not an id, so it can never collide. */
-const NEW_WORKTREE = ' new';
+const NEW_WORKTREE = '\0new';
 
 /**
  * New session in a project: `{name, agent, worktreeId}`, or null. `worktreeId`
