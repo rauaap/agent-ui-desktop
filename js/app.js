@@ -109,7 +109,13 @@ notifier.onActivate = (id) => {
 // document stayed visible and `visibilitychange` never fires.
 const dismissNotifications = () => notifier.dismissActive();
 document.addEventListener('visibilitychange', dismissNotifications);
-window.addEventListener('focus', dismissNotifications);
+window.addEventListener('focus', () => {
+  dismissNotifications();
+  // There is no global archive feed: a device with no session open cannot hear
+  // that another one archived a project or session. Focus is a natural point
+  // at which this client catches up with server state, without adding polling.
+  refresh();
+});
 
 /**
  * Map a server session row onto the store's metadata fields.
@@ -238,7 +244,30 @@ async function openProjectSettings(project) {
     // Archiving a project is the gesture for being done with it, so it closes
     // the dialog rather than reopening it over a tree the project has just left.
     if (result?.action === 'archive' || result?.action === 'unarchive') {
-      await setProjectArchived(current, result.action === 'archive');
+      const archiving = result.action === 'archive';
+      if (archiving) {
+        // Use the counts on the project row: those are the contract's live and
+        // archived totals, and together are the real size of the cascade the
+        // confirmation has to disclose before making the single PATCH.
+        const reported = Number(current.session_count)
+          + Number(current.archived_session_count);
+        const total = Number.isFinite(reported) ? reported : sessions.length;
+        const title = total
+          ? `Archive “${current.name || current.path}” and ${total} session${total === 1 ? '' : 's'}?`
+          : `Archive “${current.name || current.path}”?`;
+        const confirmed = await confirmDialog(
+          title,
+          'The project and its sessions stay readable, but no new work can start until they '
+          + 'are unarchived.'
+          + (worktreesFor(current).length
+            ? ' Its worktrees are not archived or removed; they stay on disk as they are.'
+            : ''),
+          'Archive',
+          false,
+        );
+        if (!confirmed) return;
+      }
+      await setProjectArchived(current, archiving);
       return;
     }
     if (result?.action === 'worktree-new') await createWorktreeFor(current, '');
@@ -263,8 +292,12 @@ async function setProjectArchived(project, archived) {
     // the same as how many sessions the project has: unarchiving restores only
     // what this project's archive swept up, leaving anything filed by hand.
     const moved = result?.sessions_affected ?? 0;
-    toast(`${archived ? 'Archived' : 'Unarchived'} ${project.name || project.path}`
-      + (moved ? ` and ${moved} session${moved === 1 ? '' : 's'}` : ''));
+    const sessionResult = archived
+      ? `${moved} session${moved === 1 ? '' : 's'} newly archived`
+      : `${moved} session${moved === 1 ? '' : 's'} restored`;
+    // Report zero too. In particular, an unarchive can honestly restore no
+    // sessions because all of them had been archived by hand beforehand.
+    toast(`${archived ? 'Archived' : 'Unarchived'} ${project.name || project.path}; ${sessionResult}`);
   } catch (error) {
     fail(error);
   }
