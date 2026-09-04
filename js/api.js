@@ -10,6 +10,7 @@
  * way out: ids are numbers on the wire and strings everywhere above this file.
  */
 
+import { normalizeAgents } from './agents.js';
 import { asProject, asSession, asWorktree, each, wireId } from './ids.js';
 
 const override = new URLSearchParams(location.search).get('api');
@@ -70,6 +71,21 @@ function detail(text, status) {
   }
   return `Server error ${status}`;
 }
+
+/* ------------------------------------------------------------------ */
+/* agents                                                             */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The agents this server can run, in registration order:
+ * `{id, name, default}` per row.
+ *
+ * The agent picker is built from this and from nothing else — see
+ * `js/agents.js` for why a list kept on this side is a list that goes stale.
+ * Rejects like any other call; the caller decides what an unreachable or
+ * too-old server means for the picker.
+ */
+export const listAgents = () => request('GET', '/agents').then(normalizeAgents);
 
 /* ------------------------------------------------------------------ */
 /* projects                                                           */
@@ -147,12 +163,16 @@ export const listSessions = () => request('GET', '/sessions').then(each(asSessio
  * through `POST /worktrees` and outliving whatever sessions attach to it, so a
  * failed worktree and a failed session are now two separate outcomes rather
  * than one all-or-nothing request.
+ *
+ * `agent` is omitted rather than guessed when the dialog had no list to pick
+ * from: the field is optional and the server's own default is a better answer
+ * than a name this client made up.
  */
 export const createSession = (name, projectPath, agent, worktreeId = null) =>
   request('POST', '/sessions', {
     name,
     project_path: projectPath,
-    agent,
+    ...(agent ? { agent } : {}),
     worktree_id: wireId(worktreeId),
   }).then(asSession);
 

@@ -33,6 +33,8 @@ const notifier = new Notifier(store);
 let projects = [];
 let sessionsById = new Map();
 let worktrees = [];
+/** The agents `GET /agents` last offered — see `js/agents.js`. */
+let agents = [];
 
 /* ------------------------------------------------------------------ */
 /* toasts                                                             */
@@ -122,13 +124,20 @@ async function refresh() {
     // Worktrees come along unfiltered: they are wanted in three places — the
     // tree's tooltips, the new-session picker and project settings — and one
     // list is cheaper than a filtered fetch each time a dialog opens.
-    const [nextProjects, sessions, nextWorktrees] = await Promise.all([
+    // The agent list changes only when the server is upgraded or restarted, so
+    // it rides along with the refresh button rather than being fetched once at
+    // startup — and it fails on its own, keeping whatever it last knew: an
+    // agent picker is not worth failing the tree over, and a server too old for
+    // the endpoint should still list its projects.
+    const [nextProjects, sessions, nextWorktrees, nextAgents] = await Promise.all([
       api.listProjects(),
       api.listSessions(),
       api.listWorktrees(),
+      api.listAgents().catch(() => agents),
     ]);
     projects = nextProjects;
     worktrees = nextWorktrees;
+    agents = nextAgents;
     // Keyed by the string form, like every other id-keyed collection here: a
     // `Map` or `Set` lookup is type-sensitive, and `has(1)` misses a key of
     // `"1"` without saying so.
@@ -140,7 +149,7 @@ async function refresh() {
       if (!workspace.isOpen(session.id)) store.setMeta(session.id, metaFrom(session));
     }
 
-    sidebar.setData(projects, sessions, worktrees);
+    sidebar.setData(projects, sessions, worktrees, agents);
     sidebar.setActive(workspace.activeId);
     workspace.pruneMissing(new Set(sessionsById.keys()));
     return { projects, sessions, worktrees };
@@ -368,7 +377,7 @@ function reportWorktreeKept(worktree, detail) {
 }
 
 async function createSession(project) {
-  const spec = await newSessionDialog(project, worktreesFor(project), {
+  const spec = await newSessionDialog(project, worktreesFor(project), agents, {
     // Opened from inside the dialog, on top of it: the picker adds whatever
     // comes back and selects it, so the session being created is not lost.
     onCreateWorktree: (branchSeed) => createWorktreeFor(project, branchSeed),

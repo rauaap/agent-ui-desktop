@@ -1,8 +1,9 @@
 # Agent UI — Desktop
 
-A desktop client for controlling Claude Code and OpenCode agent sessions,
-talking to the [agent-ui-server](https://github.com/rauaap/agent-ui-server)
-backend over REST and a WebSocket per session.
+A desktop client for controlling coding-agent sessions — Claude Code, OpenCode,
+pi, or whatever else the server registers — talking to the
+[agent-ui-server](https://github.com/rauaap/agent-ui-server) backend over REST
+and a WebSocket per session.
 
 It is the big-screen counterpart to
 [agent-ui-android](https://github.com/rauaap/agent-ui-android): a sidebar tree
@@ -51,6 +52,9 @@ headers, so this only works if you add them — the supported path is `WEB_ROOT`
   action lives there — new session, new worktree, removing a worktree, and
   forgetting the project, which removes it, its sessions and its worktrees but
   **never touches the project's own directory**.
+- **Agent picker** — the new-session dialog offers the agents `GET /agents`
+  says this server can run, labelled and preselected as the server asks. Nothing
+  is listed here, so an agent added on the server shows up on the next refresh.
 - **Worktrees** — a worktree is its own thing, not something a session owns: it
   is created on its own, several sessions can share one, and it outlives the
   sessions that used it. The new-session dialog picks one — "project directory"
@@ -91,6 +95,7 @@ css/app.css           layout and component styles
 js/
   api.js              REST over fetch(), same-origin
   ids.js              ids: numbers on the wire, strings everywhere above api.js
+  agents.js           the server's agent list, normalized — nothing hardcoded
   socket.js           one WebSocket per open session: backoff + buffered replay
   store.js            per-session state and the transcript reducer — no DOM
   tools.js            pure helpers over tool_use payloads
@@ -253,6 +258,29 @@ is legal**: that is `git check-ref-format`, run server-side. The create form
 sends while it is still open so git's answer lands under the branch field — a
 regex here would only approximate git's rules, and reject names git accepts.
 
+### The agent list is the server's
+
+Which agents exist is not something a client can know. This one used to keep its
+own list of two, and was wrong about it: the server had grown a third (`pi`)
+that the picker never offered, and there was nothing to notice — a stale list
+does not fail, it just quietly withholds an option.
+
+`GET /agents` ends that. Each row is `{id, name, default}`, derived server-side
+from the same models that validate `POST /sessions`, so the picker cannot offer
+an agent the server would reject or miss one it would accept, and it opens on
+the default the server would have applied anyway. `agents.js` normalizes the
+rows — dropping any that name no agent, falling back to the id for a missing
+label — and everything above it reads that list: the picker's options, its
+preselection, and the agent named in a session's tooltip.
+
+The list comes along with the ordinary refresh, since it changes only when the
+server does, and it is fetched with its own `catch`: a picker is not worth
+failing the tree over. A refresh that cannot get one keeps the last list it had.
+With no list at all — an unreachable server, or one too old for the endpoint —
+the field disappears and the create request omits `agent`, which leaves the
+choice exactly where it was: with the server's default. That is deliberately not
+a hardcoded fallback list, because a hardcoded list is the thing this replaced.
+
 ### An id is a number on the wire and a string here
 
 `projects.id`, `sessions.id` and `worktrees.id` are JSON numbers; they were uuid
@@ -286,8 +314,8 @@ corrects itself after one run.
 ## Tests
 
 The pure modules — the diff, the markdown parser, the reducer, the worktree path
-template, the id coercion — have unit tests, most ported from the Android
-client's `LineDiffTest`, `MarkdownTest` and `WorktreeTest`:
+template, the id coercion, the agent list — have unit tests, most ported from
+the Android client's `LineDiffTest`, `MarkdownTest` and `WorktreeTest`:
 
 ```sh
 node test/run.js          # any JS runtime

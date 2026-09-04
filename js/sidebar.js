@@ -10,6 +10,8 @@
  * does.
  */
 
+import { agentName } from './agents.js';
+
 const EXPANDED_KEY = 'agent-ui.expanded';
 
 const el = (tag, className, text) => {
@@ -46,14 +48,17 @@ export class Sidebar {
     this.sessions = [];
     /** @type {Map<string, object>} worktrees by id, for the badge's tooltip. */
     this.worktrees = new Map();
+    /** @type {object[]} agents from `GET /agents`, for the tooltip's label. */
+    this.agents = [];
     this.activeId = null;
     this.expanded = new Set(loadExpanded());
   }
 
-  setData(projects, sessions, worktrees = []) {
+  setData(projects, sessions, worktrees = [], agents = []) {
     this.projects = projects;
     this.sessions = sessions;
     this.worktrees = new Map(worktrees.map((w) => [String(w.id), w]));
+    this.agents = agents;
     this.render();
   }
 
@@ -154,7 +159,11 @@ export class Sidebar {
           mark.title = where;
           item.appendChild(mark);
         }
-        item.title = `${session.name}\n${session.agent}` + (where ? `\n${where}` : '');
+        // The server's label for the agent, falling back to the id it stored —
+        // which is what a session started under an agent this server no longer
+        // registers shows, rather than nothing.
+        const agent = agentName(this.agents, session.agent);
+        item.title = `${session.name}\n${agent}` + (where ? `\n${where}` : '');
         item.addEventListener('click', () => this.handlers.onOpenSession(session));
         list.appendChild(item);
       }

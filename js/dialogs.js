@@ -5,6 +5,7 @@
  * Each helper resolves with the user's input, or null if they cancelled.
  */
 
+import { defaultAgent } from './agents.js';
 import { suggestName } from './names.js';
 import { DEFAULT_TEMPLATE, absolutize, expand, normalize, slug } from './worktree.js';
 
@@ -498,11 +499,6 @@ export function forgetProjectDialog(project, sessionCount, worktreeCount = 0) {
 /* sessions                                                           */
 /* ------------------------------------------------------------------ */
 
-const AGENTS = [
-  { id: 'claude-code', label: 'Claude Code' },
-  { id: 'opencode', label: 'OpenCode' },
-];
-
 /** The "New worktree…" entry's value. Not an id, so it can never collide. */
 const NEW_WORKTREE = ' new';
 
@@ -515,13 +511,18 @@ const NEW_WORKTREE = ' new';
  * to run in — with making a new one an entry in the same list, since that is
  * the same decision reached from the other end.
  *
+ * The agents come from the server, through `GET /agents`, rather than from a
+ * list kept here — see `js/agents.js`. An empty one drops the field altogether
+ * and resolves `agent: null`, which is sent as no `agent` at all.
+ *
  * @param {object} project
  * @param {object[]} worktrees from `GET /worktrees?project_path=…`
+ * @param {object[]} agents from `GET /agents`, already normalized
  * @param {{onCreateWorktree?: (branchSeed: string) => Promise<object|null>}} handlers
  */
-export function newSessionDialog(project, worktrees = [], handlers = {}) {
+export function newSessionDialog(project, worktrees = [], agents = [], handlers = {}) {
   let nameInput;
-  let agentSelect;
+  let agentSelect = null;
   let picked = '';
   const list = [...worktrees];
 
@@ -533,16 +534,24 @@ export function newSessionDialog(project, worktrees = [], handlers = {}) {
         hint: 'Suggestions are not checked for uniqueness — duplicates are fine.',
       });
 
-      const wrap = el('div', 'field');
-      wrap.appendChild(el('label', null, 'Agent'));
-      agentSelect = el('select');
-      for (const agent of AGENTS) {
-        const option = el('option', null, agent.label);
-        option.value = agent.id;
-        agentSelect.appendChild(option);
+      // No list means an unreachable or too-old server, not a server with no
+      // agents: offering an empty select would only be a way to fail on create,
+      // so the field goes and the server applies its own default.
+      if (agents.length) {
+        const wrap = el('div', 'field');
+        wrap.appendChild(el('label', null, 'Agent'));
+        agentSelect = el('select');
+        for (const agent of agents) {
+          const option = el('option', null, agent.name);
+          option.value = agent.id;
+          agentSelect.appendChild(option);
+        }
+        // The server says which to preselect, from the same default that
+        // `POST /sessions` would apply had we sent nothing.
+        agentSelect.value = defaultAgent(agents);
+        wrap.appendChild(agentSelect);
+        body.appendChild(wrap);
       }
-      wrap.appendChild(agentSelect);
-      body.appendChild(wrap);
 
       // Nowhere else for the session to run, so there is no choice to offer.
       // `is_git_repo` is a stat of `<path>/.git` and only a hint — the server
@@ -635,7 +644,7 @@ export function newSessionDialog(project, worktrees = [], handlers = {}) {
     collect: () => {
       const name = nameInput.value.trim();
       if (!name) throw new Error('Give the session a name');
-      return { name, agent: agentSelect.value, worktreeId: picked || null };
+      return { name, agent: agentSelect ? agentSelect.value : null, worktreeId: picked || null };
     },
   });
 }

@@ -11,6 +11,7 @@
  * HTML rather than Android's text-plus-spans model.
  */
 
+import { agentName, defaultAgent, normalizeAgents } from '../js/agents.js';
 import { ADD, DELETE, MAX_DIFF_LINES, diff } from '../js/render/diff.js';
 import { asProject, asSession, asWorktree, storedIds, wireId } from '../js/ids.js';
 import { toHtml } from '../js/render/markdown.js';
@@ -622,6 +623,63 @@ test('ids: restored junk is dropped rather than opened', () => {
   assertEqual(storedIds([null, {}, undefined, true, 7]).join(), '7');
   assertEqual(storedIds(null).length, 0);
   assertEqual(storedIds('7').length, 0, 'a bare string is not a tab list');
+});
+
+/* ------------------------------------------------------------------ */
+/* agents                                                             */
+/* ------------------------------------------------------------------ */
+
+const AGENT_ROWS = [
+  { id: 'claude-code', name: 'Claude Code', default: true },
+  { id: 'opencode', name: 'OpenCode', default: false },
+  { id: 'pi', name: 'pi', default: false },
+];
+
+test('agents: the server’s list is kept whole, in its own order', () => {
+  const agents = normalizeAgents(AGENT_ROWS);
+  assertEqual(agents.map((a) => a.id).join(), 'claude-code,opencode,pi');
+  assertEqual(agents[0].name, 'Claude Code');
+  assertEqual(agents[1].default, false);
+});
+
+test('agents: a row that names no agent is dropped, not rendered', () => {
+  // An empty option would only be a way to fail on POST /sessions.
+  const agents = normalizeAgents([{ name: 'Nameless' }, { id: '  ' }, null, 'pi', ...AGENT_ROWS]);
+  assertEqual(agents.length, 3);
+});
+
+test('agents: a row with no label falls back to its id', () => {
+  assertEqual(normalizeAgents([{ id: 'codex' }])[0].name, 'codex');
+});
+
+test('agents: a duplicate id is offered once', () => {
+  assertEqual(normalizeAgents([{ id: 'pi' }, { id: 'pi', name: 'pi again' }]).length, 1);
+});
+
+test('agents: anything that is not a list is no list at all', () => {
+  assertEqual(normalizeAgents(null).length, 0);
+  assertEqual(normalizeAgents({ id: 'pi' }).length, 0);
+});
+
+test('agents: the picker opens on the server’s default', () => {
+  assertEqual(defaultAgent(normalizeAgents(AGENT_ROWS)), 'claude-code');
+  assertEqual(defaultAgent(normalizeAgents([{ id: 'opencode' }, { id: 'pi', default: true }])), 'pi',
+    'the flag wins over the order');
+  assertEqual(defaultAgent(normalizeAgents([{ id: 'opencode' }, { id: 'pi' }])), 'opencode',
+    'a server that flags none preselects the first it registered');
+});
+
+test('agents: no list means no choice to make, and none to send', () => {
+  // The field goes and `agent` is omitted, leaving the default to the server.
+  assertEqual(defaultAgent([]), null);
+  assertEqual(defaultAgent(undefined), null);
+});
+
+test('agents: an id we were not told about shows as itself', () => {
+  const agents = normalizeAgents(AGENT_ROWS);
+  assertEqual(agentName(agents, 'opencode'), 'OpenCode');
+  assertEqual(agentName(agents, 'codex'), 'codex', 'a session started under an agent since gone');
+  assertEqual(agentName([], 'pi'), 'pi');
 });
 
 export { results };
