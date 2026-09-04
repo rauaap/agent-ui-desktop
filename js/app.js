@@ -25,7 +25,7 @@ import {
   setWorktreeTemplate,
   worktreeTemplate,
 } from './dialogs.js';
-import { baseOf, normalize } from './worktree.js';
+import { baseOf, isFormerWorktree, normalize } from './worktree.js';
 
 const store = new Store();
 const notifier = new Notifier(store);
@@ -80,6 +80,10 @@ const workspace = new Workspace(
           && (event.archived_at ?? null) !== (sessionsById.get(id)?.archived_at ?? null)) {
         refresh();
       }
+      // This event carries the session's new location but not the former
+      // worktree id whose count decreased, so refresh all three lists. It is not
+      // sent on reconnect; refresh() also updates location metadata on open tabs.
+      if (event.type === 'worktree_detached') refresh();
     },
     onActiveChange: (id) => {
       notifier.setActive(id);
@@ -90,7 +94,7 @@ const workspace = new Workspace(
 
 const sidebar = new Sidebar(document.getElementById('tree'), store, {
   onOpenSession: (session) => {
-    store.setMeta(session.id, metaFrom(session));
+    store.setMeta(session.id, metaFrom(session, projectFor(session)));
     workspace.openSession(session.id);
   },
   onNewSession: createSession,
@@ -121,11 +125,14 @@ window.addEventListener('focus', () => {
  * Map a server session row onto the store's metadata fields.
  *
  * `working_dir` is still the cwd the agent runs in and still means exactly what
- * it did; the server computes it now rather than storing it, which is invisible
- * from here. `worktree_id` is what says whether that cwd is a worktree.
+ * it did. A null `worktree_id` normally means the project directory, except
+ * after explicit detachment, when the preserved cwd differs from the project
+ * path and is presented as a former worktree.
  */
-const metaFrom = (session) => ({
+const metaFrom = (session, project) => ({
   name: session.name,
+  projectId: session.project_id ?? null,
+  projectPath: project?.path ?? '',
   workingDir: session.working_dir,
   worktreeId: session.worktree_id ?? null,
   agent: session.agent,
@@ -133,6 +140,17 @@ const metaFrom = (session) => ({
   archivedAt: session.archived_at ?? null,
   autoApproveWrite: !!session.auto_approve_write,
   autoApproveCommand: !!session.auto_approve_command,
+});
+
+/** Resolve the project row that gives a session's project-directory path. */
+const projectFor = (session) => projects.find((project) => belongsTo(session, project));
+
+/** Location fields that REST must refresh even while a tab's socket is open. */
+const locationMetaFrom = (session, project) => ({
+  projectId: session.project_id ?? null,
+  projectPath: project?.path ?? '',
+  workingDir: session.working_dir,
+  worktreeId: session.worktree_id ?? null,
 });
 
 /* ------------------------------------------------------------------ */
@@ -163,10 +181,18 @@ async function refresh() {
     // `"1"` without saying so.
     sessionsById = new Map(sessions.map((s) => [String(s.id), s]));
 
-    // Seed metadata for sessions we have not opened, so the tree and any
-    // restored tab show a name before their socket says anything.
+    // Seed full metadata before a socket opens. For an open tab, keep its live
+    // status/settings but still refresh location from REST: worktree_detached is
+    // not replayed on reconnect, so REST is authoritative after an offline
+    // detach performed by another client.
     for (const session of sessions) {
-      if (!workspace.isOpen(session.id)) store.setMeta(session.id, metaFrom(session));
+      const project = projectFor(session);
+      store.setMeta(
+        session.id,
+        workspace.isOpen(session.id)
+          ? locationMetaFrom(session, project)
+          : metaFrom(session, project),
+      );
     }
 
     sidebar.setData(projects, sessions, worktrees, agents);
@@ -299,7 +325,8 @@ async function setProjectArchived(project, archived) {
     // sessions because all of them had been archived by hand beforehand.
     toast(`${archived ? 'Archived' : 'Unarchived'} ${project.name || project.path}; ${sessionResult}`);
   } catch (error) {
-    fail(error);
+    if (!archived) reportUnarchiveFailure(error);
+    else fail(error);
   }
 }
 
@@ -316,6 +343,16 @@ async function setSessionArchived(id, archived) {
     await refresh();
     toast(archived ? 'Session archived' : 'Session unarchived');
   } catch (error) {
+    if (!archived) reportUnarchiveFailure(error);
+    else fail(error);
+  }
+}
+
+/** A missing cwd is unrecoverable at the harness layer, so keep it archived. */
+function reportUnarchiveFailure(error) {
+  if (error?.status === 409 && /director(?:y|ies).*missing|missing.*director/i.test(error.message)) {
+    toast(`${error.message}. Recreate a directory at the same absolute path, then retry.`, true);
+  } else {
     fail(error);
   }
 }
@@ -425,17 +462,34 @@ async function adoptCollision(project, path) {
   return reuse ? existing : null;
 }
 
+/** Sessions whose preserved cwd is the path of this registered worktree. */
+const formerSessionsForWorktree = (worktree) => [...sessionsById.values()].filter((session) => {
+  if (String(session.project_id) !== String(worktree.project_id)) return false;
+  const project = projectFor(session);
+  return isFormerWorktree(session, project?.path)
+    && normalize(session.working_dir) === normalize(worktree.path);
+});
+
 async function removeWorktree(worktree) {
   // `exists: false` is the recovery path, not a deletion: git prunes its own
   // admin files and the row goes, but there is nothing on disk left to remove.
   const gone = worktree.exists === false;
+  const archivedFormer = formerSessionsForWorktree(worktree)
+    .filter((session) => !!session.archived_at);
+  const dependencyWarning = !gone && archivedFormer.length
+    ? ` ${archivedFormer.length} archived session${archivedFormer.length === 1 ? '' : 's'} `
+      + `${archivedFormer.length === 1 ? 'uses' : 'use'} this as a former working directory. `
+      + 'Removing it prevents those sessions from being unarchived unless a directory is '
+      + 'recreated at this exact path.'
+    : '';
   const confirmed = await confirmDialog(
     gone ? `Clean up “${baseOf(worktree.path)}”?` : `Remove “${baseOf(worktree.path)}”?`,
     gone
       ? `${worktree.path} is already gone from the server. This tidies away the record of it `
         + 'and git’s own administrative files.'
       : `git removes ${worktree.path}. Any branch it was on stays; only the checkout goes. If `
-        + 'it still holds uncommitted or untracked work, git refuses and nothing is removed.',
+        + 'it still holds uncommitted or untracked work, git refuses and nothing is removed.'
+        + dependencyWarning,
     gone ? 'Clean up' : 'Remove',
     // Cleaning up after a directory that is already gone is recovery, not a
     // deletion, so it does not get the red button.
@@ -456,18 +510,28 @@ async function removeWorktree(worktree) {
 }
 
 /**
- * The two ways `DELETE /worktrees/{id}` declines, neither of which the user
+ * The three ways `DELETE /worktrees/{id}` declines, none of which the user
  * should read as an error. Awaited, because the caller reopens project settings
  * over the top of it otherwise.
  */
 function reportWorktreeKept(worktree, detail) {
   if (/using this worktree/i.test(detail)) {
-    // The server names them. There is no force for this case, so the way
-    // forward is the sessions — and leaving the worktree alone is also fine.
+    // Explain the independent operations, but do not turn this refusal into a
+    // guided cleanup flow or perform any of them automatically.
     return noticeDialog(
       'Sessions are still using this worktree',
-      'Nothing was removed. Delete those sessions first, or simply leave the worktree where '
-      + 'it is — several sessions sharing one is a supported arrangement.',
+      'Nothing was removed. A live session must be deleted, or archived and then detached '
+      + 'from Session settings. An archived session can be detached there directly. Retry '
+      + 'after every attached session has been detached or deleted.',
+      [detail],
+    );
+  }
+  if (/live detached session/i.test(detail)) {
+    return noticeDialog(
+      'Live sessions still use this directory',
+      'Nothing was removed. These sessions kept this former worktree as their working '
+      + 'directory when they were detached. Archive them before trying again; they will not '
+      + 'be archived automatically.',
       [detail],
     );
   }
@@ -492,7 +556,7 @@ async function createSession(project) {
   try {
     const session = await api.createSession(spec.name, project.path, spec.agent, spec.worktreeId);
     await refresh();
-    store.setMeta(session.id, metaFrom(session));
+    store.setMeta(session.id, metaFrom(session, projectFor(session)));
     workspace.openSession(session.id);
   } catch (error) {
     fail(error);
@@ -520,6 +584,35 @@ async function openSessionSettings(id) {
   };
   const result = await sessionSettingsDialog(state);
   if (!result) return;
+
+  if (result.detached) {
+    const confirmed = await confirmDialog(
+      `Detach “${state.name}” from its worktree?`,
+      `The session stays archived and keeps ${state.workingDir} as its working directory. `
+      + 'Nothing on disk changes now. If that worktree is later removed, this session cannot '
+      + 'be unarchived until a directory is recreated at the exact same path.',
+      'Detach',
+      false,
+    );
+    if (!confirmed) return;
+    try {
+      const session = await api.detachSessionWorktree(id);
+      store.setMeta(id, locationMetaFrom(session, projectFor(session)));
+      await refresh();
+      toast('Session detached from its worktree; the directory is unchanged');
+    } catch (error) {
+      // The operation is idempotent while archived. A refresh also reconciles a
+      // request whose response was lost after the server completed it.
+      await refresh();
+      const current = sessionsById.get(String(id));
+      if (current && isFormerWorktree(current, projectFor(current)?.path)) {
+        toast('Session detached from its worktree; the directory is unchanged');
+      } else {
+        fail(error);
+      }
+    }
+    return;
+  }
 
   if (result.deleted) {
     // Deleting a session touches nothing on disk any more: the worktree is its
@@ -568,7 +661,11 @@ async function openSessionSettings(id) {
       await api.setSessionArchived(id, result.archived);
     }
   } catch (error) {
-    fail(error);
+    if (result.archived === false && result.archived !== before.archived) {
+      reportUnarchiveFailure(error);
+    } else {
+      fail(error);
+    }
   }
   // The server broadcasts `renamed`, `settings` and `archived` to every
   // subscriber, so the store updates itself; this is for the tree, which has no

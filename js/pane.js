@@ -11,6 +11,7 @@ import { filedLabel } from './archive.js';
 import { isBusy, parseComposerInput, toMarkdown } from './store.js';
 import { SessionSocket } from './socket.js';
 import { TranscriptView } from './render/transcript.js';
+import { isFormerWorktree } from './worktree.js';
 
 const el = (tag, className, text) => {
   const node = document.createElement(tag);
@@ -246,7 +247,10 @@ export class SessionPane {
     this.nameView.textContent = state.name || '';
     this.dirText.textContent = state.workingDir || '';
     this.dirView.title = state.workingDir || '';
-    this.worktreeTag.style.display = state.worktreeId ? '' : 'none';
+    const formerWorktree = isFormerWorktree(state);
+    this.worktreeTag.style.display = state.worktreeId || formerWorktree ? '' : 'none';
+    this.worktreeTag.classList.toggle('former', formerWorktree);
+    this.worktreeTag.textContent = formerWorktree ? 'FORMER WORKTREE' : 'WORKTREE';
 
     const offline = !state.connected;
     this.statusPill.className = `pill ${offline ? 'offline' : state.status}`;

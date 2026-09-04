@@ -120,6 +120,27 @@ export function absolutize(path, projectPath) {
   return full.startsWith('/') ? full : joinPath(normalize(projectPath), full);
 }
 
+/**
+ * Whether a session runs at the path of a worktree it used to be attached to.
+ *
+ * Detachment deliberately makes `worktree_id` null without moving the harness:
+ * `working_dir` remains the former worktree path. A null id therefore means the
+ * project directory only when that path equals the project's path. Accepts both
+ * wire rows (snake_case) and store states (camelCase) so every renderer applies
+ * the same distinction.
+ */
+export function isFormerWorktree(session, projectPath = session?.projectPath) {
+  if (!session) return false;
+  const worktreeId = session.worktree_id !== undefined
+    ? session.worktree_id
+    : session.worktreeId;
+  if (worktreeId !== null && worktreeId !== undefined) return false;
+  const workingDir = session.working_dir !== undefined
+    ? session.working_dir
+    : session.workingDir;
+  return !!workingDir && !!projectPath && normalize(workingDir) !== normalize(projectPath);
+}
+
 const TOKEN = /%[PNBb%]/g;
 
 /**

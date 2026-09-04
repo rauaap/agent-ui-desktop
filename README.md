@@ -226,8 +226,9 @@ worktrees.
 
 It used to be created inside `POST /sessions` and destroyed with the session
 that made it. It is now `POST /worktrees`, `GET /worktrees`,
-`DELETE /worktrees/{id}`, and a `worktree_id` on the session — null for one
-running in the project directory.
+`DELETE /worktrees/{id}`, and a `worktree_id` on the session. A null id normally
+means the project directory; an explicitly detached session is the exception,
+keeping its former worktree path as its effective `working_dir`.
 
 That turns three UI decisions:
 
@@ -239,11 +240,14 @@ That turns three UI decisions:
   it did to the worktree, the new one says the worktree is still there when the
   last session on it goes — a note, not a nudge, because finishing a session
   does not mean finishing with the branch.
-- Removing a worktree is its own action, in project settings. Removal is never
-  forced and **git counts untracked files as dirty**, so one an agent did real
-  work in refuses: the *common* path, phrased as information. git's own
-  suggestion to `--force` it is not passed on, because the server takes no force
-  flag and the fix is in the worktree.
+- Removing a worktree is its own action, in project settings. Attached sessions
+  block it; the refusal names them and explains that archived sessions can be
+  detached later from Session settings, without turning the error into a guided
+  cleanup flow. A live detached session also blocks removal while its preserved
+  cwd is active. Removal is never forced and **git counts untracked files as
+  dirty**, so one an agent did real work in refuses: the *common* path, phrased
+  as information. git's own suggestion to `--force` it is not passed on,
+  because the server takes no force flag and the fix is in the worktree.
 
 ### The path is the client's problem
 
@@ -346,7 +350,17 @@ only what that cascade took — a session filed by hand beforehand stays filed �
 which is why the toast reports the server's `sessions_affected` rather than a
 count guessed here. Unarchiving a *session* silently unarchives its project too
 (a live session under an archived project would have nowhere to show), so it
-refetches both lists rather than patching one row.
+refetches both lists rather than patching one row. No session is brought back
+unless its effective working directory still exists as a directory: that is a
+harness requirement whether the path is its project, a current worktree, or a
+former one.
+
+Detaching is deliberately separate from archiving. An archived session that is
+still attached gets **Detach from worktree** in Session settings; the call clears
+its worktree association but preserves the absolute cwd and touches nothing on
+disk. The session is then labelled **Former worktree**, not mistaken for a
+project-directory session. Removing that worktree later may remove the cwd and
+prevent future unarchive until the same absolute directory is recreated.
 
 A busy session cannot be archived. The archive controls are disabled when one is
 running and the project dialog names the offenders, but that guard is not
@@ -372,9 +386,9 @@ settings.
 ## Tests
 
 The pure modules — the diff, the markdown parser, the reducer, the worktree path
-template, the id coercion, the agent list, and the archive's split and ordering
-— have unit tests, most ported from the Android client's `LineDiffTest`,
-`MarkdownTest` and `WorktreeTest`:
+template, session location and detachment, the id coercion, the agent list, and
+the archive's split and ordering — have unit tests, most ported from the Android
+client's `LineDiffTest`, `MarkdownTest` and `WorktreeTest`:
 
 ```sh
 node test/run.js          # any JS runtime

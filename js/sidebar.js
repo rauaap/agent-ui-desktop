@@ -17,6 +17,7 @@
 
 import { agentName } from './agents.js';
 import { byArchivedAt, filedAt, filedLabel, isArchived, partition } from './archive.js';
+import { isFormerWorktree } from './worktree.js';
 
 const EXPANDED_KEY = 'agent-ui.expanded';
 
@@ -96,7 +97,10 @@ export class Sidebar {
    * That branch is not live state: an agent can switch branches in there and
    * nothing updates, hence "created on" rather than a bare branch name.
    */
-  worktreeNote(session) {
+  worktreeNote(session, project) {
+    if (isFormerWorktree(session, project.path)) {
+      return `Former worktree: ${session.working_dir}`;
+    }
     if (session.worktree_id === null || session.worktree_id === undefined) return null;
     const worktree = this.worktrees.get(String(session.worktree_id));
     const branch = worktree?.branch ? `\ncreated on ${worktree.branch}` : '';
@@ -211,7 +215,9 @@ export class Sidebar {
     if (!open) return;
 
     const list = el('div', 'sessions');
-    for (const session of sessions) list.appendChild(this.sessionRow(session, inArchive));
+    for (const session of sessions) {
+      list.appendChild(this.sessionRow(session, project, inArchive));
+    }
 
     // No "New session" in the archive: the server refuses one in an archived
     // project, and in a live project it would land in the tree above, several
@@ -225,7 +231,7 @@ export class Sidebar {
     this.root.appendChild(list);
   }
 
-  sessionRow(session, inArchive) {
+  sessionRow(session, project, inArchive) {
     const active = String(session.id) === String(this.activeId);
     const item = el('button', `session${active ? ' active' : ''}${inArchive ? ' archived' : ''}`);
     item.dataset.id = String(session.id);
@@ -235,9 +241,10 @@ export class Sidebar {
     // which the tree otherwise gives no hint of. The row has no space for
     // a path, so the badge carries it in its tooltip and the pane header
     // spells it out in full.
-    const where = this.worktreeNote(session);
+    const former = isFormerWorktree(session, project.path);
+    const where = this.worktreeNote(session, project);
     if (where) {
-      const mark = el('span', 'wt', 'WT');
+      const mark = el('span', `wt${former ? ' former' : ''}`, former ? 'FWT' : 'WT');
       mark.title = where;
       item.appendChild(mark);
     }

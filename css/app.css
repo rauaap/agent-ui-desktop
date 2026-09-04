@@ -200,6 +200,15 @@ input, textarea {
   padding: 1px 6px;
 }
 
+/* A detached session still runs at its old worktree path, but is no longer
+ * attached to the managed worktree row. Keep that distinction visible rather
+ * than letting a null worktree id imply the project directory. */
+.wt.former {
+  color: var(--muted);
+  border-color: var(--line);
+  background: var(--panel-hover);
+}
+
 /* session rows nested under a project */
 .sessions {
   margin: 0 0 4px 12px;

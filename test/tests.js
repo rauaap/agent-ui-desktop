@@ -23,6 +23,7 @@ import {
   absolutize,
   baseOf,
   expand,
+  isFormerWorktree,
   joinPath,
   normalize,
   parentOf,
@@ -221,6 +222,9 @@ const freshState = () => ({
   id: 's1',
   name: '',
   workingDir: '',
+  projectId: 'p1',
+  projectPath: '/projects/app',
+  worktreeId: null,
   agent: 'claude-code',
   status: 'idle',
   archivedAt: null,
@@ -567,6 +571,29 @@ test('absolutize: a hand-typed relative path resolves against the project', () =
   assertEqual(absolutize('', '/projects/app'), '/projects/app');
 });
 
+test('session location: null worktree id distinguishes project and former paths', () => {
+  assertTrue(!isFormerWorktree(
+    { worktree_id: null, working_dir: '/projects/app' },
+    '/projects/app/',
+  ), 'the project directory is not a former worktree');
+  assertTrue(isFormerWorktree(
+    { worktree_id: null, working_dir: '/projects/app-fix' },
+    '/projects/app',
+  ), 'a preserved different path is a former worktree');
+  assertTrue(!isFormerWorktree(
+    { worktree_id: '7', working_dir: '/projects/app-fix' },
+    '/projects/app',
+  ), 'a non-null id is a current worktree');
+});
+
+test('session location: store-shaped metadata uses the same distinction', () => {
+  assertTrue(isFormerWorktree({
+    worktreeId: null,
+    workingDir: '/projects/app-fix',
+    projectPath: '/projects/app',
+  }));
+});
+
 /* ------------------------------------------------------------------ */
 /* ids                                                                */
 /* ------------------------------------------------------------------ */
@@ -765,6 +792,65 @@ test('store: a reconnect replay keeps the session archived', () => {
   store.apply('s', { type: 'status', status: 'idle' });
   store.commitReplay('s');
   assertEqual(store.session('s').archivedAt, '2026-08-26T11:02:00Z');
+});
+
+test('reducer: worktree_detached preserves the cwd and clears the association', () => {
+  const s = freshState();
+  s.worktreeId = '7';
+  s.workingDir = '/projects/app-fix';
+  feed(s, {
+    type: 'worktree_detached',
+    worktree_id: null,
+    working_dir: '/projects/app-fix',
+  });
+  assertEqual(s.worktreeId, null);
+  assertEqual(s.workingDir, '/projects/app-fix');
+  assertTrue(isFormerWorktree(s));
+});
+
+test('reducer: duplicate worktree_detached events are idempotent', () => {
+  const s = freshState();
+  const event = {
+    type: 'worktree_detached',
+    worktree_id: null,
+    working_dir: '/projects/app-fix',
+  };
+  feed(s, event, event);
+  assertEqual(s.worktreeId, null);
+  assertEqual(s.workingDir, '/projects/app-fix');
+});
+
+test('store: replay preserves former-worktree location metadata', () => {
+  const store = new Store();
+  store.setMeta('s', {
+    projectPath: '/projects/app',
+    workingDir: '/projects/app-fix',
+    worktreeId: null,
+  });
+  store.beginReplay('s');
+  store.apply('s', { type: 'status', status: 'idle' });
+  store.commitReplay('s');
+  assertTrue(isFormerWorktree(store.session('s')));
+});
+
+test('store: REST detachment during replay is not swapped back out', () => {
+  const store = new Store();
+  store.setMeta('s', {
+    projectPath: '/projects/app',
+    workingDir: '/projects/app-fix',
+    worktreeId: '7',
+  });
+  store.beginReplay('s');
+  // worktree_detached is not sent on reconnect, so a list refresh can be the
+  // only authority that catches an offline detach while replay is in flight.
+  store.setMeta('s', {
+    projectPath: '/projects/app',
+    workingDir: '/projects/app-fix',
+    worktreeId: null,
+  });
+  store.apply('s', { type: 'status', status: 'idle' });
+  store.commitReplay('s');
+  assertTrue(isFormerWorktree(store.session('s')));
 });
 
 export { results };

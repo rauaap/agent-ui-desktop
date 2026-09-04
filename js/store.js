@@ -17,6 +17,7 @@
  */
 
 import { toolSummary } from './tools.js';
+import { isFormerWorktree } from './worktree.js';
 
 /**
  * Live transcript cap. The server replays at most 200 rows on connect
@@ -78,9 +79,11 @@ function blankState(id) {
     id,
     name: '',
     workingDir: '',
-    // The worktree this session is attached to, or null when it runs in the
-    // project directory. Not ownership: the worktree is its own resource, may
-    // be shared with other sessions, and outlives this one.
+    projectId: null,
+    projectPath: '',
+    // The worktree this session is attached to. Null normally means the
+    // project directory, but a detached session keeps its former worktree path
+    // in `workingDir`; compare that with `projectPath` to tell the two apart.
     worktreeId: null,
     agent: 'claude-code',
     status: 'idle',
@@ -154,6 +157,11 @@ export class Store {
   setMeta(id, meta) {
     const state = this.session(id);
     Object.assign(state, meta);
+    // A reconnect shadow began as a snapshot of the visible state. If REST
+    // supplies authoritative location metadata while replay is in flight, copy
+    // it there too or commitReplay would resurrect the stale worktree link.
+    const replaying = this.replays.get(id);
+    if (replaying) Object.assign(replaying, meta);
     this.emit(id, [{ op: 'meta' }]);
   }
 
@@ -182,6 +190,8 @@ export class Store {
     Object.assign(shadow, {
       name: live.name,
       workingDir: live.workingDir,
+      projectId: live.projectId,
+      projectPath: live.projectPath,
       worktreeId: live.worktreeId,
       agent: live.agent,
       status: live.status,
@@ -305,6 +315,15 @@ export function reduce(state, event) {
     // toggling, just take what it says.
     case 'archived':
       state.archivedAt = event.archived_at ?? null;
+      changes.push({ op: 'meta' });
+      break;
+
+    // Detachment changes only the database association: the harness remains at
+    // the same absolute path. Unlike `archived`, this is not replayed when a
+    // socket connects, so REST metadata also refreshes these fields.
+    case 'worktree_detached':
+      state.worktreeId = event.worktree_id ?? null;
+      if (event.working_dir) state.workingDir = event.working_dir;
       changes.push({ op: 'meta' });
       break;
 
@@ -508,8 +527,10 @@ export function rowText(row) {
 export function toMarkdown(state) {
   const parts = [`# ${state.name || 'Session'}`, ''];
   if (state.workingDir) {
-    const where = state.worktreeId ? `\`${state.workingDir}\` (worktree)` : `\`${state.workingDir}\``;
-    parts.push(`${where} · ${state.agent}`, '');
+    const kind = state.worktreeId
+      ? ' (worktree)'
+      : isFormerWorktree(state) ? ' (former worktree)' : '';
+    parts.push(`\`${state.workingDir}\`${kind} · ${state.agent}`, '');
   }
 
   for (const row of state.rows) {

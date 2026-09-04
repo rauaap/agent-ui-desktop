@@ -218,6 +218,17 @@ export const setSessionArchived = (id, archived) =>
   request('PATCH', `/sessions/${id}`, { archived }).then(asSession);
 
 /**
+ * Release an archived session's worktree association without moving its
+ * harness. The returned row has `worktree_id: null` while `working_dir` keeps
+ * the former worktree's absolute path. Nothing on disk is touched.
+ *
+ * A completed detach may be retried while the session remains archived. A 409
+ * means it is live, or that it always ran in the project directory.
+ */
+export const detachSessionWorktree = (id) =>
+  request('POST', `/sessions/${id}/detach-worktree`).then(asSession);
+
+/**
  * Deletes the session and its transcript. Nothing on disk is touched — a
  * worktree it was attached to stays where it is, for the other sessions using
  * it or for the next one. Resolves `{status: "deleted"}` and nothing else.

@@ -9,7 +9,14 @@ import { defaultAgent } from './agents.js';
 import { filedLabel, isArchived, partition } from './archive.js';
 import { suggestName } from './names.js';
 import { isBusy } from './store.js';
-import { DEFAULT_TEMPLATE, absolutize, expand, normalize, slug } from './worktree.js';
+import {
+  DEFAULT_TEMPLATE,
+  absolutize,
+  expand,
+  isFormerWorktree,
+  normalize,
+  slug,
+} from './worktree.js';
 
 const el = (tag, className, text) => {
   const node = document.createElement(tag);
@@ -830,9 +837,9 @@ export function createWorktreeDialog(
 }
 
 /**
- * Session settings: rename, auto-approve toggles, archive, delete.
+ * Session settings: rename, auto-approve toggles, archive, detach, delete.
  *
- * Resolves `{name, autoApproveWrite, autoApproveCommand, archived, deleted}`,
+ * Resolves `{name, autoApproveWrite, autoApproveCommand, archived, detached, deleted}`,
  * or null.
  *
  * @param {object} state the store's session state
@@ -842,6 +849,7 @@ export function sessionSettingsDialog(state) {
   let writeToggle;
   let commandToggle;
   let archiveToggle;
+  let detached = false;
   let deleted = false;
 
   return show({
@@ -886,6 +894,21 @@ export function sessionSettingsDialog(state) {
           'This session is working. Stop it, or wait for the turn to finish, before archiving.'));
       }
 
+      // Detachment is deliberately a later cleanup action, never part of the
+      // archive gesture. It releases only the database association and leaves
+      // the harness at this same path.
+      if (archived && state.worktreeId !== null && state.worktreeId !== undefined) {
+        const detach = el('button', 'btn', 'Detach from worktree…');
+        detach.addEventListener('click', (event) => {
+          event.preventDefault();
+          detached = true;
+          submit();
+        });
+        body.appendChild(detach);
+      } else if (isFormerWorktree(state)) {
+        detail(body, 'Former worktree', state.workingDir, { mono: true });
+      }
+
       // Confirms on its own — the caller asks for a second confirmation before
       // anything is actually deleted.
       const danger = el('button', 'btn deny', 'Delete this session…');
@@ -904,6 +927,7 @@ export function sessionSettingsDialog(state) {
         autoApproveWrite: writeToggle.checked,
         autoApproveCommand: commandToggle.checked,
         archived: archiveToggle.checked,
+        detached,
         deleted,
       };
     },
