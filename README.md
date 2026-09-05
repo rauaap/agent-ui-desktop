@@ -1,7 +1,7 @@
 # Agent UI — Desktop
 
-A desktop client for controlling coding-agent sessions — Claude Code, OpenCode,
-pi, or whatever else the server registers — talking to the
+A desktop client for controlling coding-agent sessions — Claude Code, pi, or
+whatever else the server registers — talking to the
 [agent-ui-server](https://github.com/rauaap/agent-ui-server) backend over REST
 and a WebSocket per session.
 

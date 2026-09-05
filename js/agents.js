@@ -10,7 +10,7 @@
  * grown a third.
  *
  * An agent id is not one of ours. It is a registry key the server mints
- * (`claude-code`, `opencode`, `pi`), a string on the wire and a string here, so
+ * (`claude-code`, `pi`), a string on the wire and a string here, so
  * `ids.js` has nothing to say about it.
  */
 
