@@ -95,7 +95,7 @@ const workspace = new Workspace(
 
 const sidebar = new Sidebar(document.getElementById('tree'), store, {
   onOpenSession: (session) => {
-    store.setMeta(session.id, metaFrom(session, projectFor(session)));
+    store.setMeta(session.id, metaFor(session));
     workspace.openSession(session.id);
   },
   onNewSession: createSession,
@@ -154,6 +154,15 @@ const locationMetaFrom = (session, project) => ({
   worktreeId: session.worktree_id ?? null,
 });
 
+/**
+ * Metadata a REST snapshot may write without overruling an open session's
+ * live socket. Location is REST-owned because worktree detachment is not
+ * replayed; the socket owns status, settings, archive state and the name.
+ */
+const metaFor = (session) => (workspace.isOpen(session.id)
+  ? locationMetaFrom(session, projectFor(session))
+  : metaFrom(session, projectFor(session)));
+
 /* ------------------------------------------------------------------ */
 /* data                                                               */
 /* ------------------------------------------------------------------ */
@@ -187,13 +196,7 @@ async function refresh() {
     // not replayed on reconnect, so REST is authoritative after an offline
     // detach performed by another client.
     for (const session of sessions) {
-      const project = projectFor(session);
-      store.setMeta(
-        session.id,
-        workspace.isOpen(session.id)
-          ? locationMetaFrom(session, project)
-          : metaFrom(session, project),
-      );
+      store.setMeta(session.id, metaFor(session));
     }
 
     sidebar.setData(projects, sessions, worktrees, agents);
