@@ -153,6 +153,11 @@ test('md: inline code wins over inner markers', () => {
   assertEqual(toHtml('use `a **b** c`'), '<p>use <code>a **b** c</code></p>');
 });
 
+test('md: inline code closes on an equal-length backtick run', () => {
+  assertEqual(toHtml('` ```js `'), '<p><code>```js</code></p>');
+  assertEqual(toHtml('`` a ` b ``'), '<p><code>a ` b</code></p>');
+});
+
 test('md: heading levels', () => {
   assertEqual(toHtml('## Title'), '<h2>Title</h2>');
   // Seven hashes is not a heading.
@@ -171,6 +176,20 @@ test('md: fenced code block is escaped verbatim', () => {
   assertEqual(
     toHtml('```\n<b>&</b>\n```'),
     '<pre><code>&lt;b&gt;&amp;&lt;/b&gt;</code></pre>',
+  );
+});
+
+test('md: a fence with an info string does not close a code block', () => {
+  assertEqual(
+    toHtml('```text\n```js\n```'),
+    '<pre><code class="lang-text">```js</code></pre>',
+  );
+});
+
+test('md: longer outer fences contain shorter fenced examples', () => {
+  assertEqual(
+    toHtml('````markdown\n```js\nconst x = 1;\n```\n````'),
+    '<pre><code class="lang-markdown">```js\nconst x = 1;\n```</code></pre>',
   );
 });
 

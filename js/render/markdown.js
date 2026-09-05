@@ -52,13 +52,19 @@ export function toHtml(md) {
     const line = lines[i];
     const trimmed = line.trim();
 
-    // fenced code block ``` ... ```
-    if (trimmed.startsWith('```')) {
+    // A closing fence must be bare and at least as long as its opener. Fences
+    // inside the block are literal content; use a longer outer fence to show
+    // shorter fenced examples, as required by standard Markdown.
+    const openingFence = trimmed.match(/^(`{3,})(.*)$/);
+    if (openingFence) {
       flush();
-      const language = trimmed.slice(3).trim();
+      const fenceLength = openingFence[1].length;
+      const language = openingFence[2].trim();
       const code = [];
       let j = i + 1;
-      while (j < lines.length && !lines[j].trim().startsWith('```')) {
+      while (j < lines.length) {
+        const candidate = lines[j].trim().match(/^(`{3,})$/);
+        if (candidate && candidate[1].length >= fenceLength) break;
         code.push(lines[j]);
         j++;
       }
@@ -130,12 +136,34 @@ function inline(source) {
   while (i < n) {
     const c = s[i];
 
-    // inline code `...`
+    // Inline code delimiters are runs of backticks. Only a run of exactly the
+    // same length closes the span; differently sized runs are literal content.
     if (c === '`') {
-      const j = s.indexOf('`', i + 1);
-      if (j > i) {
-        out += `<code>${escapeHtml(s.slice(i + 1, j))}</code>`;
-        i = j + 1;
+      let openingEnd = i + 1;
+      while (openingEnd < n && s[openingEnd] === '`') openingEnd++;
+      const delimiterLength = openingEnd - i;
+      let search = openingEnd;
+      let closingEnd = -1;
+
+      while (search < n) {
+        const closingStart = s.indexOf('`', search);
+        if (closingStart < 0) break;
+        let end = closingStart + 1;
+        while (end < n && s[end] === '`') end++;
+        if (end - closingStart === delimiterLength) {
+          let code = s.slice(openingEnd, closingStart);
+          if (code.startsWith(' ') && code.endsWith(' ') && /[^ ]/.test(code)) {
+            code = code.slice(1, -1);
+          }
+          out += `<code>${escapeHtml(code)}</code>`;
+          closingEnd = end;
+          break;
+        }
+        search = end;
+      }
+
+      if (closingEnd >= 0) {
+        i = closingEnd;
         continue;
       }
     }
