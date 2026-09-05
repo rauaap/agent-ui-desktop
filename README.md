@@ -3,12 +3,11 @@
 A desktop client for controlling coding-agent sessions — Claude Code, pi, or
 whatever else the server registers — talking to the
 [agent-ui-server](https://github.com/rauaap/agent-ui-server) backend over REST
-and a WebSocket per session.
+with REST polling plus a WebSocket for the selected session.
 
 It is the big-screen counterpart to
 [agent-ui-android](https://github.com/rauaap/agent-ui-android): a sidebar tree
-of projects and sessions plus **tabbed transcripts**, so you can watch one agent
-work while prompting another.
+of projects and sessions beside the currently selected live transcript.
 
 **There is no build step.** No bundler, no npm, no toolchain, no runtime
 dependencies — plain ES modules the browser loads directly. `git clone` is the
@@ -69,18 +68,18 @@ headers, so this only works if you add them — the supported path is `WEB_ROOT`
   `%b` the branch verbatim. The default `%P/%N-%B` puts `/projects/app` on
   branch `fix-login` at `/projects/app-fix-login`. The seeded path follows the
   branch field until you edit it, and a Reset button leashes it again.
-- **Session tabs** — several sessions open at once, each with its own live
-  WebSocket. The tab's status dot shows idle / running / needs-you at a glance.
-  Open tabs are restored on reload.
+- **Live session list** — the sidebar polls lightweight session metadata every
+  three seconds, so every status dot stays current. Selecting a session opens
+  the one full transcript WebSocket; its status patches the sidebar immediately.
 - **Live transcript** — streamed agent output rendered as markdown, collapsible
   tool cards with git-style diffs and terminal-style command blocks, inline
   approval prompts (including the agent's own multiple-choice options and a
   free-form denial reason), and AskUserQuestion cards.
 - **Auto-approve** — per-session toggles for writes and shell commands.
   Auto-approved tools still appear in the transcript, marked as such.
-- **Desktop notifications** — one switch in the sidebar covers every open
-  session. Fires when a turn completes or an approval blocks, and stays quiet
-  for the session you are currently looking at.
+- **Desktop notifications** — one switch in the sidebar watches the selected
+  session while the app is in the background. It fires when a turn completes
+  or an approval blocks, and stays quiet while that session is on screen.
 - **Bash mode** — a message starting with `!` runs as a shell command in the
   session's working directory instead of going to the agent. `\!` sends a prompt
   that really does start with an exclamation mark.
@@ -104,12 +103,12 @@ js/
   api.js              REST over fetch(), same-origin
   ids.js              ids: numbers on the wire, strings everywhere above api.js
   agents.js           the server's agent list, normalized — nothing hardcoded
-  socket.js           one WebSocket per open session: backoff + buffered replay
-  store.js            per-session state and the transcript reducer — no DOM
+  socket.js           selected-session WebSocket: backoff + buffered replay
+  store.js            selected-session state and transcript reducer — no DOM
   tools.js            pure helpers over tool_use payloads
   sidebar.js          the project/session tree, and the archive below it
   archive.js          reading `archived_at`: split, order, label — no DOM
-  tabs.js             tab strip and pane lifecycle
+  workspace.js        selected pane and socket lifecycle
   pane.js             one session: header, transcript, composer
   dialogs.js          native <dialog> forms for CRUD and settings
   notify.js           Notification API + "don't shout about what's on screen"
@@ -136,9 +135,10 @@ is testable without a browser.
 changes, not a new state, so a streaming turn touches exactly one node — the
 trailing agent message. No virtual DOM, and a long transcript stays smooth.
 
-**One socket per open tab.** Opening a tab is what starts watching a session;
-closing it stops. That replaces the Android client's per-session bell opt-in
-with something visible in the UI by construction.
+**One full socket, for the selected session.** The sidebar polls `/sessions`
+for lightweight metadata; selecting a row opens its transcript stream and
+replaces the previous pane. Socket status wins for that row and patches its dot
+immediately, while the poll owns every unselected row.
 
 ### The window is the only fixed dimension
 
@@ -301,17 +301,16 @@ a hardcoded fallback list, because a hardcoded list is the thing this replaced.
 
 `projects.id`, `sessions.id` and `worktrees.id` are JSON numbers; they were uuid
 strings until the server renumbered its rows. Above `api.js` they are strings,
-because that is what `dataset`, `localStorage`, a `<select>`'s value and a URL
-turn them into regardless — so the conversion happens once, in `ids.js`, at the
+because that is what `dataset`, a `<select>`'s value and a URL turn them into
+regardless — so the conversion happens once, in `ids.js`, at the
 door they come in through rather than at each of the dozen places they are
 compared.
 
 That is worth a section because the alternative fails *quietly*. `1 === "1"` is
 `false` and `new Set([1]).has("1")` is `false`, so an id that keeps its wire type
-does not throw or log — the active-session highlight simply stops applying, the
-status dots stop updating, and restored tabs silently never open. Nothing about
-`String(s.id)` is defensive noise; it is the only thing standing between those
-features and a no-op.
+does not throw or log — the active-session highlight simply stops applying and
+status dots stop updating. Nothing about `String(s.id)` is defensive noise; it
+is the only thing standing between those features and a no-op.
 
 There is one door back out. `worktree_id` on `POST /sessions` is the only id
 this client sends in a request *body* rather than in a URL, and the server types
@@ -322,10 +321,7 @@ predictably into a path and `` `/sessions/${id}` `` needs no help.
 Otherwise an id is identity, never arithmetic: nothing here parses one to order
 two, or slices one — that last was a uuid-era habit and would now throw on a
 number. `request_id` and an approval option's `id` are minted by the agent
-or the approval protocol, are strings already, and are left alone. Ids saved
-before the renumbering need no migration: the restore path checks each against
-the current session list and drops what it does not find, so a stale list
-corrects itself after one run.
+or the approval protocol, are strings already, and are left alone.
 
 ### The archive is server state the client only sorts
 
@@ -403,8 +399,8 @@ or open `test/index.html` in a browser, which needs nothing installed at all.
 ## Differences from the Android client
 
 - **No server address setting.** Same-origin serving makes it unnecessary.
-- **No per-session notification opt-in.** Every open tab is watched; one switch
-  turns notifications on or off globally.
+- **No per-session notification opt-in.** One switch controls notifications for
+  whichever session is selected.
 - **No fallback for pre-`/projects` servers.** The Android client degrades to an
   unscoped session list on a 404; this one requires a current server.
 - **Search and export** are new here.

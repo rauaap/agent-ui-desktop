@@ -2,8 +2,9 @@
  * Bootstrap and wiring.
  *
  * Everything stateful lives in the modules this pulls together — the store owns
- * transcript state, the workspace owns open tabs and their sockets, the sidebar
- * owns the tree. This file is the plumbing between them and the REST API.
+ * the selected session's transcript state, the workspace owns its pane and
+ * socket, and the sidebar owns the polled session tree. This file is the
+ * plumbing between them and the REST API.
  */
 
 import * as api from './api.js';
@@ -11,7 +12,7 @@ import { agentPreference, setAgentPreference } from './agents.js';
 import { partition } from './archive.js';
 import { Store, isBusy } from './store.js';
 import { Sidebar, belongsTo } from './sidebar.js';
-import { Workspace } from './tabs.js';
+import { Workspace } from './workspace.js';
 import { Notifier } from './notify.js';
 import {
   appSettingsDialog,
@@ -58,7 +59,6 @@ const fail = (error) => toast(error?.message || String(error), true);
 
 const workspace = new Workspace(
   {
-    strip: document.getElementById('tabstrip'),
     panes: document.getElementById('panes'),
     empty: document.getElementById('empty-state'),
   },
@@ -70,20 +70,23 @@ const workspace = new Workspace(
     onError: (message) => toast(message, true),
     onLiveEvent: (id, event) => {
       notifier.observe(id, event);
-      // A turn ending or a rename changes what the tree should show.
-      if (event.type === 'status' || event.type === 'renamed') sidebar.refreshStatuses();
+      if (event.type === 'status') {
+        // The selected session's socket is newer than the poller. Patch the
+        // catalog row in place so the sidebar follows it immediately, and keep
+        // that value when an older poll finishes later.
+        const session = sessionsById.get(String(id));
+        if (session) session.status = event.status || 'idle';
+        sidebar.refreshStatuses();
+      }
       // Archiving moves a row between the two halves of the tree, which the
-      // dots-only repaint cannot do — and this event is how an archive
-      // performed on another device reaches us at all. The server also sends it
-      // on connect, so it is only news when it disagrees with the last refresh;
-      // otherwise opening a tab would refetch both lists for nothing.
+      // dots-only repaint cannot do. The next poll would catch it, but an
+      // explicit refresh makes a local or remote archive feel immediate.
       if (event.type === 'archived'
-          && (event.archived_at ?? null) !== (sessionsById.get(id)?.archived_at ?? null)) {
+          && (event.archived_at ?? null) !== (sessionsById.get(String(id))?.archived_at ?? null)) {
         refresh();
       }
       // This event carries the session's new location but not the former
-      // worktree id whose count decreased, so refresh all three lists. It is not
-      // sent on reconnect; refresh() also updates location metadata on open tabs.
+      // worktree id whose count decreased, so refresh all three lists.
       if (event.type === 'worktree_detached') refresh();
     },
     onActiveChange: (id) => {
@@ -114,13 +117,7 @@ notifier.onActivate = (id) => {
 // document stayed visible and `visibilitychange` never fires.
 const dismissNotifications = () => notifier.dismissActive();
 document.addEventListener('visibilitychange', dismissNotifications);
-window.addEventListener('focus', () => {
-  dismissNotifications();
-  // There is no global archive feed: a device with no session open cannot hear
-  // that another one archived a project or session. Focus is a natural point
-  // at which this client catches up with server state, without adding polling.
-  refresh();
-});
+window.addEventListener('focus', dismissNotifications);
 
 /**
  * Map a server session row onto the store's metadata fields.
@@ -146,7 +143,7 @@ const metaFrom = (session, project) => ({
 /** Resolve the project row that gives a session's project-directory path. */
 const projectFor = (session) => projects.find((project) => belongsTo(session, project));
 
-/** Location fields that REST must refresh even while a tab's socket is open. */
+/** Location fields that REST must refresh while the selected socket is open. */
 const locationMetaFrom = (session, project) => ({
   projectId: session.project_id ?? null,
   projectPath: project?.path ?? '',
@@ -155,7 +152,7 @@ const locationMetaFrom = (session, project) => ({
 });
 
 /**
- * Metadata a REST snapshot may write without overruling an open session's
+ * Metadata a REST snapshot may write without overruling the selected session's
  * live socket. Location is REST-owned because worktree detachment is not
  * replayed; the socket owns status, settings, archive state and the name.
  */
@@ -166,6 +163,28 @@ const metaFor = (session) => (workspace.isOpen(session.id)
 /* ------------------------------------------------------------------ */
 /* data                                                               */
 /* ------------------------------------------------------------------ */
+
+function acceptSessions(sessions, fullRefresh = false) {
+  // A poll may have started before the selected session's latest socket event.
+  // Preserve the socket-owned status in both representations rather than
+  // letting that older response make the sidebar jump backwards.
+  const active = sessions.find((session) => workspace.isOpen(session.id));
+  if (active && store.has(active.id)) active.status = store.session(active.id).status;
+
+  // Keyed by the string form, like every other id-keyed collection here: a
+  // `Map` or `Set` lookup is type-sensitive, and `has(1)` misses a key of
+  // `"1"` without saying so.
+  sessionsById = new Map(sessions.map((session) => [String(session.id), session]));
+
+  // Only the selected session has runtime state. Polling refreshes its location,
+  // which its socket does not replay, without touching socket-owned metadata.
+  if (active) store.setMeta(active.id, metaFor(active));
+
+  if (fullRefresh) sidebar.setData(projects, sessions, worktrees, agents);
+  else sidebar.setSessions(sessions);
+  sidebar.setActive(workspace.activeId);
+  workspace.pruneMissing(new Set(sessionsById.keys()));
+}
 
 async function refresh() {
   try {
@@ -186,26 +205,28 @@ async function refresh() {
     projects = nextProjects;
     worktrees = nextWorktrees;
     agents = nextAgents;
-    // Keyed by the string form, like every other id-keyed collection here: a
-    // `Map` or `Set` lookup is type-sensitive, and `has(1)` misses a key of
-    // `"1"` without saying so.
-    sessionsById = new Map(sessions.map((s) => [String(s.id), s]));
-
-    // Seed full metadata before a socket opens. For an open tab, keep its live
-    // status/settings but still refresh location from REST: worktree_detached is
-    // not replayed on reconnect, so REST is authoritative after an offline
-    // detach performed by another client.
-    for (const session of sessions) {
-      store.setMeta(session.id, metaFor(session));
-    }
-
-    sidebar.setData(projects, sessions, worktrees, agents);
-    sidebar.setActive(workspace.activeId);
-    workspace.pruneMissing(new Set(sessionsById.keys()));
+    acceptSessions(sessions, true);
     return { projects, sessions, worktrees };
   } catch (error) {
     fail(error);
     return { projects: [], sessions: [], worktrees: [] };
+  }
+}
+
+const POLL_INTERVAL_MS = 3000;
+let pollInFlight = false;
+
+/** Refresh the session catalog without repeating the heavier project metadata loads. */
+async function pollSessions() {
+  if (pollInFlight || document.visibilityState === 'hidden') return;
+  pollInFlight = true;
+  try {
+    acceptSessions(await api.listSessions());
+  } catch {
+    // Keep the last useful catalog through a transient polling failure. Manual
+    // refreshes still surface errors when the user explicitly asks for one.
+  } finally {
+    pollInFlight = false;
   }
 }
 
@@ -730,7 +751,7 @@ sidebarToggle.addEventListener('click', () => {
 });
 
 // A notification bell in the sidebar header: one switch for every session,
-// since every open tab is already being watched.
+// for the selected session's live connection.
 const bell = document.createElement('button');
 bell.className = 'icon-btn';
 bell.textContent = '🔔';
@@ -767,14 +788,6 @@ sidebarHead.insertBefore(settingsButton, newProjectButton);
 /* ------------------------------------------------------------------ */
 
 (async () => {
-  const { sessions } = await refresh();
-  const known = new Set(sessions.map((s) => String(s.id)));
-  // Restore the tabs that were open last time, skipping any that have since
-  // been deleted server-side. This fails closed on purpose: a stored id is
-  // opened only if the server still lists it, which is also what makes ids
-  // saved before the server renumbered its rows harmless — they match nothing
-  // and drop out after one run, so there is no migration to write.
-  for (const id of Workspace.restoreIds()) {
-    if (known.has(id)) workspace.openSession(id);
-  }
+  await refresh();
+  setInterval(pollSessions, POLL_INTERVAL_MS);
 })();

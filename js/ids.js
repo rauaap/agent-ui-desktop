@@ -3,10 +3,10 @@
  *
  * Project and session ids arrive from the server as JSON **numbers** — they
  * were uuid strings before it renumbered its rows — and are held everywhere in
- * this client as strings, which is what the DOM, `localStorage` and a URL each
- * turn them into anyway. Coercing at the doors they come in through is what
- * keeps `node.dataset.id === session.id` and `new Set(sessions.map((s) =>
- * s.id)).has(restoredId)` true rather than silently false: `1 === "1"` is
+ * this client as strings, which is what the DOM and a URL each turn them into
+ * anyway. Coercing at the doors they come in through is what keeps
+ * `node.dataset.id === session.id` and other id-keyed lookups true rather than
+ * silently false: `1 === "1"` is
  * `false`, and `new Set([1]).has("1")` is too, neither with a word said.
  *
  * An id is identity, never arithmetic: nothing downstream parses one back to a
@@ -52,16 +52,3 @@ export const wireId = (id) => {
 
 /** Lift a row mapper over a list response, leaving anything else alone. */
 export const each = (fn) => (rows) => (Array.isArray(rows) ? rows.map(fn) : rows);
-
-/**
- * The ids worth trying from a persisted tab list.
- *
- * A list written by an older build holds numbers and one written before the
- * renumbering holds uuids, so both shapes are taken and handed back as strings.
- * Whether an id still exists is the caller's question: it checks each against
- * the current session list and drops the rest, which is what makes a stale list
- * harmless — no migration, it self-corrects after one run.
- */
-export const storedIds = (parsed) => (Array.isArray(parsed)
-  ? parsed.filter((v) => typeof v === 'string' || typeof v === 'number').map((v) => String(v))
-  : []);

@@ -1,5 +1,5 @@
 /**
- * One WebSocket per open session.
+ * The selected session's WebSocket.
  *
  * The server replays the last 200 scrollback rows on connect and then sends the
  * current `status` — that trailing status is the end-of-replay marker. The

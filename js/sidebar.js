@@ -81,6 +81,14 @@ export class Sidebar {
     this.render();
   }
 
+  /** Apply a poll without rebuilding the tree when only status changed. */
+  setSessions(sessions) {
+    const rerender = sessionRowsChanged(this.sessions, sessions);
+    this.sessions = sessions;
+    if (rerender) this.render();
+    else this.refreshStatuses();
+  }
+
   setActive(id) {
     this.activeId = id;
     for (const node of this.root.querySelectorAll('.session')) {
@@ -108,9 +116,11 @@ export class Sidebar {
     return `Worktree: ${session.working_dir}${branch}${missing}`;
   }
 
-  /** Live status wins over the REST snapshot for sessions we have open. */
+  /** The selected session's live status wins over its polled catalog row. */
   statusOf(session) {
-    if (this.store.has(session.id)) return this.store.session(session.id).status;
+    if (String(this.activeId) === String(session.id) && this.store.has(session.id)) {
+      return this.store.session(session.id).status;
+    }
     return session.status || 'idle';
   }
 
@@ -328,6 +338,20 @@ export class Sidebar {
 }
 
 /** Newest-filed first, over whichever timestamp put the project in the archive. */
+const ROW_FIELDS = [
+  'id', 'project_id', 'name', 'working_dir', 'worktree_id', 'agent',
+  'archived_at', 'last_active_at',
+];
+
+/** Whether a poll changed anything represented by the tree beyond its dots. */
+function sessionRowsChanged(before, after) {
+  if (before.length !== after.length) return true;
+  for (let i = 0; i < before.length; i++) {
+    if (ROW_FIELDS.some((field) => before[i]?.[field] !== after[i]?.[field])) return true;
+  }
+  return false;
+}
+
 function compareGroups(a, b) {
   const left = filedAt(a.project, a.archived);
   const right = filedAt(b.project, b.archived);

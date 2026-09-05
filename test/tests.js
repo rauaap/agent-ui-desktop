@@ -14,7 +14,7 @@
 import { agentName, defaultAgent, normalizeAgents, preferredAgent } from '../js/agents.js';
 import { byArchivedAt, filedAt, isArchived, partition } from '../js/archive.js';
 import { ADD, DELETE, MAX_DIFF_LINES, diff } from '../js/render/diff.js';
-import { asProject, asSession, asWorktree, storedIds, wireId } from '../js/ids.js';
+import { asProject, asSession, asWorktree, wireId } from '../js/ids.js';
 import { toHtml } from '../js/render/markdown.js';
 import { Store, parseComposerInput, reduce, rowText } from '../js/store.js';
 import { toolSummary } from '../js/tools.js';
@@ -661,16 +661,6 @@ test('ids: the coerced id matches what the DOM and a Set would hold', () => {
   const known = new Set(sessions.map((s) => s.id));
   assertTrue(known.has('1'), 'a Set of ids is testable with a string');
   assertTrue(sessions.some((s) => s.id === '2'), 'an id compares equal to its DOM form');
-});
-
-test('ids: restored tabs survive both id eras', () => {
-  assertEqual(storedIds([1, '2', 'a3f1-9c']).join(), '1,2,a3f1-9c');
-});
-
-test('ids: restored junk is dropped rather than opened', () => {
-  assertEqual(storedIds([null, {}, undefined, true, 7]).join(), '7');
-  assertEqual(storedIds(null).length, 0);
-  assertEqual(storedIds('7').length, 0, 'a bare string is not a tab list');
 });
 
 /* ------------------------------------------------------------------ */

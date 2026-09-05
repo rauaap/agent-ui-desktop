@@ -1,10 +1,9 @@
 /**
- * Desktop notifications for sessions you aren't looking at.
+ * Desktop notifications for the selected session while the app is not visible.
  *
- * Every open tab holds a socket, so this watches all of them at once — no
- * per-session opt-in like the Android client's bell toggle and WatchService.
- * The suppression rule is the same one WatchService applies via `viewing`: stay
- * quiet for the session on screen, speak up for the rest.
+ * Only that session has a full event WebSocket; the metadata poll deliberately
+ * does not pretend to be a transcript event stream. The suppression rule is the
+ * same one WatchService applies via `viewing`: stay quiet while it is on screen.
  */
 
 import { isBusy } from './store.js';
@@ -51,8 +50,8 @@ export class Notifier {
   }
 
   /**
-   * Feed one session event. Fires on a turn finishing and on anything that
-   * blocks waiting for the user.
+   * Feed one selected-session event. Fires on a turn finishing and on anything
+   * that blocks waiting for the user.
    */
   observe(sessionId, event) {
     const state = this.store.session(sessionId);

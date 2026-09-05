@@ -1,10 +1,9 @@
 /**
  * One open session: header, transcript, composer.
  *
- * The pane owns the socket for its session — opening a tab is what starts
- * watching a session, and closing it is what stops. That replaces the Android
- * client's per-session bell opt-in with something visible in the UI by
- * construction.
+ * The pane owns the socket for the selected session. Selecting another session
+ * destroys this pane and connection; the sidebar tracks every other session
+ * through its lightweight metadata poll.
  */
 
 import { filedLabel } from './archive.js';
@@ -295,8 +294,6 @@ export class SessionPane {
   }
 
   focusComposer() {
-    // Nothing could be measured while the pane was hidden, so size the box now
-    // that it is on screen — a draft left in it survives the tab switch.
     this.autoGrow();
     if (!this.input.disabled) this.input.focus();
   }

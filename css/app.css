@@ -1,6 +1,6 @@
 /*
- * Layout: a two-pane shell — sidebar tree on the left, tabbed session panes on
- * the right — plus the transcript card styles.
+ * Layout: a two-pane shell — sidebar tree on the left, selected session on the
+ * right — plus the transcript card styles.
  *
  * Everything here is plain CSS with no build step. Class names are flat and
  * descriptive rather than nested, so a selector can be found by grepping for
@@ -326,84 +326,32 @@ input, textarea {
 .project.archived:hover,
 .session.archived:hover { color: var(--muted); }
 
-/* An archived session that is open in a tab is still the active one, and the
- * highlight has to beat the dimming above. */
+/* An archived selected session is still active, and the highlight has to beat
+ * the dimming above. */
 .session.archived.active { color: var(--ink); }
 
 /* ------------------------------------------------------------------ */
-/* main / tabs                                                        */
+/* main                                                               */
 /* ------------------------------------------------------------------ */
 
 #main {
+  position: relative;
   display: flex;
   flex-direction: column;
   min-width: 0;
   min-height: 0;
 }
 
-#tabstrip {
-  display: flex;
-  align-items: stretch;
-  flex: none;
-  gap: 2px;
-  padding: 6px 8px 0;
-  background: var(--panel);
-  border-bottom: 1px solid var(--line);
-  overflow-x: auto;
-  scrollbar-width: thin;
-}
-
-/* flex: none so the strip's `overflow-x: auto` is what happens when the tabs
- * stop fitting. The default would shrink them all towards nothing instead, and
- * a row of unreadable stubs is worse than a row you scroll. */
-.tab {
-  display: flex;
-  align-items: center;
-  flex: none;
-  gap: 8px;
-  max-width: 220px;
-  padding: 7px 10px;
-  border-radius: var(--radius) var(--radius) 0 0;
-  color: var(--muted);
-  white-space: nowrap;
-}
-
-.tab:hover { background: var(--panel-hover); }
-
-.tab.active {
-  background: var(--bg);
-  color: var(--ink);
-  box-shadow: inset 0 2px 0 var(--accent);
-}
-
-.tab .tname {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.tab .close {
-  color: var(--faint);
-  font-size: 15px;
-  line-height: 1;
-  padding: 0 2px;
-  border-radius: 4px;
-}
-
-.tab .close:hover { color: var(--danger); background: var(--danger-soft); }
-
-/* Sticky so it stays on screen once enough tabs are open for the strip to
- * scroll — it is the only way back to a hidden sidebar. */
+/* Floats over the pane header so removing tabs also removes their otherwise
+ * empty strip. It remains reachable when the sidebar itself is hidden. */
 .sidebar-toggle {
-  position: sticky;
-  left: 0;
-  z-index: 1;
-  flex: none;
-  align-self: center;
-  margin-right: 6px;
+  position: absolute;
+  top: 9px;
+  left: 8px;
+  z-index: 2;
   padding: 4px 8px;
   color: var(--faint);
-  background: var(--panel);
+  background: var(--bg);
   border-radius: var(--radius);
 }
 
@@ -449,7 +397,7 @@ input, textarea {
   flex: none;
   flex-wrap: wrap;
   gap: 6px 10px;
-  padding: 10px 16px;
+  padding: 10px 16px 10px 52px;
   border-bottom: 1px solid var(--line-soft);
 }
 
