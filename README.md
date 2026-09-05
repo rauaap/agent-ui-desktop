@@ -145,11 +145,13 @@ immediately, while the poll owns every unselected row.
 Browser zoom is not a scale factor the page can see — it resizes the CSS pixel,
 so all the layout is told is that the viewport got smaller. 140% zoom on a
 1366×768 screen lays out in 976×549. So nothing is sized to a constant that a
-smaller window has to honour: the sidebar is `clamp(180px, 26vw, 260px)`, the
-composer's growth cap and the bash output's height are capped against `vh` as
-well as a pixel value, and the pane header wraps rather than pushing its buttons
-past the right edge. The pane is positioned against its container rather than
-sized at `height: 100%`, which is what keeps the composer pinned to the bottom of
+smaller window has to honour: the sidebar defaults to
+`clamp(180px, 26vw, 260px)` and can be resized by dragging its right edge (the
+choice is remembered), the composer's growth cap and the bash output's height
+are capped against `vh` as well as a pixel value, and the pane header wraps
+rather than pushing its buttons past the right edge. The pane is positioned
+against its container rather than sized at `height: 100%`, which is what keeps
+the composer pinned to the bottom of
 the window instead of being pushed off it by a long transcript.
 
 The two breakpoints that remain are `@container` queries on the pane, not media

@@ -750,6 +750,113 @@ sidebarToggle.addEventListener('click', () => {
   }
 });
 
+// Dragging the divider overrides the responsive default, while still reserving
+// enough room for the main pane. The chosen width is kept separately from the
+// temporarily clamped width, so narrowing and re-expanding the window restores
+// what the user selected.
+const SIDEBAR_WIDTH_KEY = 'agent-ui.sidebar-width';
+const SIDEBAR_MIN = 180;
+const MAIN_MIN = 240;
+const SIDEBAR_MAX = 480;
+const sidebarEl = document.getElementById('sidebar');
+const sidebarResizer = document.getElementById('sidebar-resizer');
+let preferredSidebarWidth = null;
+let resizingPointer = null;
+
+const sidebarLimits = () => ({
+  min: SIDEBAR_MIN,
+  max: Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, window.innerWidth - MAIN_MIN)),
+});
+
+const applySidebarWidth = (width) => {
+  const { min, max } = sidebarLimits();
+  const displayed = Math.max(min, Math.min(max, width));
+  appEl.style.setProperty('--sidebar-w', `${displayed}px`);
+  sidebarResizer.setAttribute('aria-valuemin', String(min));
+  sidebarResizer.setAttribute('aria-valuemax', String(max));
+  sidebarResizer.setAttribute('aria-valuenow', String(Math.round(displayed)));
+};
+
+const saveSidebarWidth = () => {
+  try {
+    localStorage.setItem(SIDEBAR_WIDTH_KEY, String(Math.round(preferredSidebarWidth)));
+  } catch {
+    /* resizing still works, it just won't be remembered */
+  }
+};
+
+try {
+  const restored = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY));
+  if (Number.isFinite(restored) && restored > 0) preferredSidebarWidth = restored;
+} catch {
+  /* use the responsive default */
+}
+if (preferredSidebarWidth !== null) applySidebarWidth(preferredSidebarWidth);
+else {
+  const width = sidebarEl.getBoundingClientRect().width;
+  sidebarResizer.setAttribute('aria-valuemin', String(SIDEBAR_MIN));
+  sidebarResizer.setAttribute('aria-valuemax', String(sidebarLimits().max));
+  sidebarResizer.setAttribute('aria-valuenow', String(Math.round(width)));
+}
+
+sidebarResizer.addEventListener('pointerdown', (event) => {
+  if (event.button !== 0) return;
+  preferredSidebarWidth = sidebarEl.getBoundingClientRect().width;
+  resizingPointer = event.pointerId;
+  sidebarResizer.setPointerCapture(event.pointerId);
+  document.body.classList.add('sidebar-resizing');
+  event.preventDefault();
+});
+
+sidebarResizer.addEventListener('pointermove', (event) => {
+  if (event.pointerId !== resizingPointer) return;
+  preferredSidebarWidth = event.clientX - appEl.getBoundingClientRect().left;
+  applySidebarWidth(preferredSidebarWidth);
+});
+
+const finishSidebarResize = (event) => {
+  if (event.pointerId !== resizingPointer) return;
+  resizingPointer = null;
+  document.body.classList.remove('sidebar-resizing');
+  saveSidebarWidth();
+};
+sidebarResizer.addEventListener('pointerup', finishSidebarResize);
+sidebarResizer.addEventListener('pointercancel', finishSidebarResize);
+
+sidebarResizer.addEventListener('keydown', (event) => {
+  const current = sidebarEl.getBoundingClientRect().width;
+  const { min, max } = sidebarLimits();
+  let next;
+  if (event.key === 'ArrowLeft') next = current - 16;
+  else if (event.key === 'ArrowRight') next = current + 16;
+  else if (event.key === 'Home') next = min;
+  else if (event.key === 'End') next = max;
+  else return;
+  event.preventDefault();
+  preferredSidebarWidth = next;
+  applySidebarWidth(next);
+  saveSidebarWidth();
+});
+
+sidebarResizer.addEventListener('dblclick', () => {
+  preferredSidebarWidth = null;
+  appEl.style.removeProperty('--sidebar-w');
+  try {
+    localStorage.removeItem(SIDEBAR_WIDTH_KEY);
+  } catch {
+    /* the responsive default is still restored for this page */
+  }
+  sidebarResizer.setAttribute('aria-valuenow', String(Math.round(sidebarEl.getBoundingClientRect().width)));
+});
+
+window.addEventListener('resize', () => {
+  if (preferredSidebarWidth !== null) applySidebarWidth(preferredSidebarWidth);
+  else {
+    sidebarResizer.setAttribute('aria-valuemax', String(sidebarLimits().max));
+    sidebarResizer.setAttribute('aria-valuenow', String(Math.round(sidebarEl.getBoundingClientRect().width)));
+  }
+});
+
 // A notification bell in the sidebar header: one switch for every session,
 // for the selected session's live connection.
 const bell = document.createElement('button');
