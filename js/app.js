@@ -7,6 +7,7 @@
  */
 
 import * as api from './api.js';
+import { agentPreference, setAgentPreference } from './agents.js';
 import { partition } from './archive.js';
 import { Store, isBusy } from './store.js';
 import { Sidebar, belongsTo } from './sidebar.js';
@@ -682,13 +683,19 @@ document.getElementById('new-project-btn').addEventListener('click', createProje
 document.getElementById('refresh-btn').addEventListener('click', () => refresh());
 
 /**
- * Client settings — currently just the worktree path template, which is a
- * client idea start to finish: the server takes an absolute path and has never
- * heard of a template.
+ * Client settings. The preferred agent and worktree path template live in this
+ * browser; the resolved values are sent to the server when resources are made.
  */
 async function openAppSettings() {
-  const result = await appSettingsDialog(worktreeTemplate(), sampleProject()?.path);
-  if (result) setWorktreeTemplate(result.template);
+  const result = await appSettingsDialog(
+    worktreeTemplate(),
+    sampleProject()?.path,
+    agents,
+    agentPreference(),
+  );
+  if (!result) return;
+  setWorktreeTemplate(result.template);
+  if (result.agent !== undefined) setAgentPreference(result.agent);
 }
 
 // Collapsing the sidebar gives the transcript the full window, for reading a

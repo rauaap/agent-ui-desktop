@@ -53,8 +53,9 @@ headers, so this only works if you add them — the supported path is `WEB_ROOT`
   forgetting the project, which removes it, its sessions and its worktrees but
   **never touches the project's own directory**.
 - **Agent picker** — the new-session dialog offers the agents `GET /agents`
-  says this server can run, labelled and preselected as the server asks. Nothing
-  is listed here, so an agent added on the server shows up on the next refresh.
+  says this server can run. Settings lets this browser remember which one to
+  preselect; without that preference, the server’s default is used. Nothing is
+  listed here, so an agent added on the server shows up on the next refresh.
 - **Worktrees** — a worktree is its own thing, not something a session owns: it
   is created on its own, several sessions can share one, and it outlives the
   sessions that used it. The new-session dialog picks one — "project directory"
@@ -283,7 +284,10 @@ an agent the server would reject or miss one it would accept, and it opens on
 the default the server would have applied anyway. `agents.js` normalizes the
 rows — dropping any that name no agent, falling back to the id for a missing
 label — and everything above it reads that list: the picker's options, its
-preselection, and the agent named in a session's tooltip.
+preselection, and the agent named in a session's tooltip. A preferred agent can
+be saved in Settings for this browser. It wins while that id remains in the
+server’s list; if an upgrade removes it, selection falls back safely to the
+server default.
 
 The list comes along with the ordinary refresh, since it changes only when the
 server does, and it is fetched with its own `catch`: a picker is not worth

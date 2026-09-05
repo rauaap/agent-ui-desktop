@@ -5,7 +5,7 @@
  * Each helper resolves with the user's input, or null if they cancelled.
  */
 
-import { defaultAgent } from './agents.js';
+import { preferredAgent } from './agents.js';
 import { filedLabel, isArchived, partition } from './archive.js';
 import { suggestName } from './names.js';
 import { isBusy } from './store.js';
@@ -243,20 +243,41 @@ export const setWorktreeTemplate = (template) => {
 const SAMPLE_BRANCH = 'feature/fix-login';
 
 /**
- * Client settings. Only the worktree path template so far, which is entirely a
- * client idea — the server takes an absolute path and has never heard of a
- * template.
+ * Client settings. Both values are local to this browser: the server receives
+ * the chosen agent when a session is created, and receives an already-expanded
+ * absolute worktree path.
  *
- * Resolves `{template}`, or null.
+ * Resolves `{template, agent}`, or null. `agent` is undefined when the server
+ * supplied no agent list, so opening settings offline cannot erase a choice.
  */
-export function appSettingsDialog(template, sampleProject) {
+export function appSettingsDialog(template, sampleProject, agents = [], agent = null) {
   let input;
+  let agentSelect;
   const project = sampleProject || '/projects/app';
 
   return show({
     title: 'Settings',
     confirm: 'Save',
     body: (body) => {
+      if (agents.length) {
+        const wrap = el('div', 'field');
+        wrap.appendChild(el('label', null, 'Default agent'));
+        agentSelect = el('select');
+        for (const offered of agents) {
+          const option = el('option', null, offered.name);
+          option.value = offered.id;
+          agentSelect.appendChild(option);
+        }
+        agentSelect.value = preferredAgent(agents, agent);
+        wrap.appendChild(agentSelect);
+        wrap.appendChild(el('div', 'dlg-note',
+          'Preselected whenever you create a session. You can still choose another agent there.'));
+        body.appendChild(wrap);
+      } else {
+        body.appendChild(el('div', 'dlg-note',
+          'Default agent is unavailable until the server provides its agent list.'));
+      }
+
       input = field(body, 'Worktree path template', template || DEFAULT_TEMPLATE, {
         mono: true,
         hint: '%P the project’s parent directory · %N the project directory’s name · '
@@ -279,7 +300,10 @@ export function appSettingsDialog(template, sampleProject) {
         '%B rather than %b is the one to reach for: slashes are legal in branch names, and '
         + `%P/%N-%b would put this one two directories down rather than beside the project.`));
     },
-    collect: () => ({ template: input.value.trim() || DEFAULT_TEMPLATE }),
+    collect: () => ({
+      template: input.value.trim() || DEFAULT_TEMPLATE,
+      agent: agentSelect ? agentSelect.value : undefined,
+    }),
   });
 }
 
@@ -621,9 +645,9 @@ export function newSessionDialog(project, worktrees = [], agents = [], handlers 
           option.value = agent.id;
           agentSelect.appendChild(option);
         }
-        // The server says which to preselect, from the same default that
-        // `POST /sessions` would apply had we sent nothing.
-        agentSelect.value = defaultAgent(agents);
+        // Prefer this browser's setting; if it names an agent the server no
+        // longer offers, preferredAgent falls safely back to the server default.
+        agentSelect.value = preferredAgent(agents);
         wrap.appendChild(agentSelect);
         body.appendChild(wrap);
       }

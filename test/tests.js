@@ -11,7 +11,7 @@
  * HTML rather than Android's text-plus-spans model.
  */
 
-import { agentName, defaultAgent, normalizeAgents } from '../js/agents.js';
+import { agentName, defaultAgent, normalizeAgents, preferredAgent } from '../js/agents.js';
 import { byArchivedAt, filedAt, isArchived, partition } from '../js/archive.js';
 import { ADD, DELETE, MAX_DIFF_LINES, diff } from '../js/render/diff.js';
 import { asProject, asSession, asWorktree, storedIds, wireId } from '../js/ids.js';
@@ -717,10 +717,19 @@ test('agents: the picker opens on the server’s default', () => {
     'a server that flags none preselects the first it registered');
 });
 
+test('agents: a saved preference wins when the server still offers it', () => {
+  const agents = normalizeAgents(AGENT_ROWS);
+  assertEqual(preferredAgent(agents, 'pi'), 'pi');
+  assertEqual(preferredAgent(agents, 'removed-agent'), 'claude-code',
+    'a stale setting falls back to the server default');
+  assertEqual(preferredAgent(agents, null), 'claude-code');
+});
+
 test('agents: no list means no choice to make, and none to send', () => {
   // The field goes and `agent` is omitted, leaving the default to the server.
   assertEqual(defaultAgent([]), null);
   assertEqual(defaultAgent(undefined), null);
+  assertEqual(preferredAgent([], 'pi'), null);
 });
 
 test('agents: an id we were not told about shows as itself', () => {

@@ -51,6 +51,36 @@ export const defaultAgent = (agents) => {
   return chosen ? chosen.id : null;
 };
 
+const PREFERENCE_KEY = 'agent-ui.default-agent';
+
+/** The agent this browser should prefer for new sessions, if one was saved. */
+export const agentPreference = () => {
+  try {
+    return localStorage.getItem(PREFERENCE_KEY) || null;
+  } catch {
+    return null;
+  }
+};
+
+export const setAgentPreference = (id) => {
+  try {
+    if (id) localStorage.setItem(PREFERENCE_KEY, id);
+    else localStorage.removeItem(PREFERENCE_KEY);
+  } catch {
+    /* the server default keeps working, it just won't be remembered */
+  }
+};
+
+/**
+ * Pick the saved preference when this server still offers it, otherwise use
+ * the server's default. A stale preference is deliberately harmless: agent
+ * registries can change when the server is upgraded.
+ */
+export const preferredAgent = (agents, preference = agentPreference()) => {
+  const list = Array.isArray(agents) ? agents : [];
+  return list.some((agent) => agent.id === preference) ? preference : defaultAgent(list);
+};
+
 /** The label for an agent id, falling back to the id for one we were not told about. */
 export const agentName = (agents, id) => {
   const match = (Array.isArray(agents) ? agents : []).find((agent) => agent.id === id);
