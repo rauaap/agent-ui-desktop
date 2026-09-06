@@ -7,6 +7,13 @@
  */
 
 import { filedLabel } from './archive.js';
+import {
+  completionToken,
+  insertCompletion,
+  isBashComposer,
+  matchPaths,
+} from './completion.js';
+import { FileTreeSocket } from './file-tree.js';
 import { isBusy, parseComposerInput, toMarkdown } from './store.js';
 import { SessionSocket } from './socket.js';
 import { TranscriptView } from './render/transcript.js';
@@ -38,6 +45,13 @@ export class SessionPane {
 
     this.socket = new SessionSocket(sessionId, store, (event) => {
       handlers.onLiveEvent?.(sessionId, event);
+    });
+    this.completionOpen = false;
+    this.completionResults = [];
+    this.completionIndex = 0;
+    this.wasBash = false;
+    this.fileTree = new FileTreeSocket(sessionId, () => {
+      if (this.completionOpen) this.renderCompletions();
     });
 
     this.root = el('div', 'pane');
@@ -156,9 +170,44 @@ export class SessionPane {
     this.input.placeholder = 'Send a prompt…';
     this.input.addEventListener('input', () => {
       this.autoGrow();
-      this.paintMode();
+      const bash = this.paintMode();
+      if (bash && !this.wasBash) this.fileTree.open(true);
+      this.wasBash = bash;
+      if (!bash) this.hideCompletions();
+      else if (this.completionOpen) this.renderCompletions();
     });
     this.input.addEventListener('keydown', (event) => {
+      if (isBashComposer(this.input.value) && event.key === 'Tab') {
+        event.preventDefault();
+        if (this.completionOpen && this.completionResults.length) {
+          const step = event.shiftKey ? -1 : 1;
+          const length = this.completionResults.length;
+          this.completionIndex = (this.completionIndex + step + length) % length;
+          this.paintCompletionSelection();
+        } else {
+          this.invokeCompletion();
+        }
+        return;
+      }
+      if (this.completionOpen && event.key === 'Escape') {
+        event.preventDefault();
+        this.hideCompletions();
+        return;
+      }
+      if (this.completionOpen && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
+        event.preventDefault();
+        const step = event.key === 'ArrowDown' ? 1 : -1;
+        const length = this.completionResults.length;
+        if (length) this.completionIndex = (this.completionIndex + step + length) % length;
+        this.paintCompletionSelection();
+        return;
+      }
+      if (this.completionOpen && event.key === 'Enter' && !event.shiftKey
+          && this.completionResults.length) {
+        event.preventDefault();
+        this.acceptCompletion(this.completionIndex);
+        return;
+      }
       // Enter sends, Shift+Enter inserts a newline. This is the input's submit
       // gesture, not a shortcut layer.
       if (event.key === 'Enter' && !event.shiftKey) {
@@ -167,10 +216,22 @@ export class SessionPane {
       }
     });
 
+    this.completionButton = el('button', 'btn completion-trigger', 'Paths');
+    this.completionButton.type = 'button';
+    this.completionButton.title = 'Complete a path (Tab)';
+    this.completionButton.setAttribute('aria-label', 'Complete a file path');
+    this.completionButton.style.display = 'none';
+    this.completionButton.addEventListener('click', () => this.invokeCompletion());
+
+    this.completionMenu = el('div', 'completion-menu');
+    this.completionMenu.setAttribute('role', 'listbox');
+    this.completionMenu.setAttribute('aria-label', 'File path completions');
+    this.completionMenu.style.display = 'none';
+
     this.sendButton = el('button', 'btn primary send', 'Send');
     this.sendButton.addEventListener('click', () => this.send());
 
-    composer.append(this.input, this.sendButton);
+    composer.append(this.completionMenu, this.input, this.completionButton, this.sendButton);
     return composer;
   }
 
@@ -195,6 +256,90 @@ export class SessionPane {
     const bash = parseComposerInput(this.input.value)?.kind === 'bash';
     this.input.classList.toggle('bash', bash);
     this.sendButton.textContent = bash ? 'Run' : 'Send';
+    this.completionButton.style.display = bash ? '' : 'none';
+    return bash;
+  }
+
+  /** Open or refresh the local completion list. Also serves as manual retry. */
+  invokeCompletion() {
+    if (!isBashComposer(this.input.value)) return;
+    this.fileTree.open(true);
+    this.completionOpen = true;
+    this.completionIndex = 0;
+    this.renderCompletions();
+  }
+
+  renderCompletions() {
+    if (!this.completionOpen) return;
+    const cache = this.fileTree.cache;
+    const token = completionToken(this.input.value, this.input.selectionStart);
+    this.completionMenu.replaceChildren();
+    this.completionResults = [];
+
+    if (!token) {
+      this.hideCompletions();
+      return;
+    }
+    if (cache.state !== 'ready') {
+      const fallback = cache.state === 'connecting'
+        ? 'Loading files…'
+        : 'File completion is unavailable.';
+      this.completionMenu.appendChild(el('div', 'completion-status', cache.message || fallback));
+      this.completionMenu.style.display = '';
+      return;
+    }
+
+    this.completionResults = matchPaths(cache.searchPaths, token.query);
+    if (!this.completionResults.length) {
+      this.completionMenu.appendChild(el('div', 'completion-status', 'No matching paths'));
+    } else {
+      if (this.completionIndex >= this.completionResults.length) this.completionIndex = 0;
+      this.completionResults.forEach((path, index) => {
+        const option = el('button', 'completion-option', path);
+        option.type = 'button';
+        option.setAttribute('role', 'option');
+        option.dataset.index = String(index);
+        // Keep textarea selection intact until click chooses the path.
+        option.addEventListener('mousedown', (event) => event.preventDefault());
+        option.addEventListener('click', () => this.acceptCompletion(index));
+        this.completionMenu.appendChild(option);
+      });
+      this.paintCompletionSelection();
+    }
+    this.completionMenu.style.display = '';
+  }
+
+  paintCompletionSelection() {
+    const options = this.completionMenu.querySelectorAll('.completion-option');
+    options.forEach((option, index) => {
+      const selected = index === this.completionIndex;
+      option.classList.toggle('selected', selected);
+      option.setAttribute('aria-selected', selected ? 'true' : 'false');
+      if (selected) option.scrollIntoView({ block: 'nearest' });
+    });
+  }
+
+  acceptCompletion(index) {
+    const path = this.completionResults[index];
+    const token = completionToken(this.input.value, this.input.selectionStart);
+    if (!path || !token) return;
+    const next = insertCompletion(this.input.value, token, path);
+    const cursor = next.length - (this.input.value.length - token.end);
+    this.input.value = next;
+    this.input.setSelectionRange(cursor, cursor);
+    this.autoGrow();
+    this.paintMode();
+    this.hideCompletions();
+    this.input.focus();
+  }
+
+  hideCompletions() {
+    this.completionOpen = false;
+    this.completionResults = [];
+    if (this.completionMenu) {
+      this.completionMenu.replaceChildren();
+      this.completionMenu.style.display = 'none';
+    }
   }
 
   send() {
@@ -236,6 +381,8 @@ export class SessionPane {
     }
 
     this.input.value = '';
+    this.wasBash = false;
+    this.hideCompletions();
     this.autoGrow();
     this.paintMode();
   }
@@ -301,6 +448,7 @@ export class SessionPane {
   destroy() {
     window.removeEventListener('resize', this.onViewportChange);
     this.unsubscribe();
+    this.fileTree.close();
     this.socket.close();
     this.transcript.destroy();
     this.root.remove();

@@ -104,6 +104,9 @@ js/
   ids.js              ids: numbers on the wire, strings everywhere above api.js
   agents.js           the server's agent list, normalized — nothing hardcoded
   socket.js           selected-session WebSocket: backoff + buffered replay
+  file-tree.js        lazy file-tree WebSocket and reconnect lifecycle
+  file-tree-cache.js  validated snapshot/patch cache — no DOM
+  completion.js       local path matching, shell token parsing and escaping
   store.js            selected-session state and transcript reducer — no DOM
   tools.js            canonical action validation, labels, and summaries
   sidebar.js          the project/session tree, and the archive below it
@@ -192,6 +195,15 @@ arrives rather than appended, so a command that finishes mid-stream does not
 split the agent message below it. The card is bordered red and its output sits
 in a plain code block: the agent never saw any of this, and the block is there to
 be copied into a prompt if you decide it should.
+
+Entering Bash mode lazily opens the session's separate `/files` WebSocket and
+keeps its revisioned path snapshot for the life of the selected pane. Tab opens
+component-boundary, case-insensitive completion at the cursor; further presses
+move through the results (Shift+Tab moves back). The **Paths** button provides
+the same opening gesture on touch keyboards. Matching and ranking are
+entirely local. Selecting a result replaces the complete shell token with one
+safely quoted relative path (and preserves a directory's trailing slash), so no
+completion query or `@` syntax is sent to the server.
 
 ### Project settings report; they do not edit
 
@@ -387,9 +399,10 @@ settings.
 
 ## Tests
 
-The pure modules — the diff, the markdown parser, the reducer, the worktree path
-template, session location and detachment, the id coercion, the agent list, and
-the archive's split and ordering — have unit tests, most ported from the Android
+The pure modules — the diff, the markdown parser, the reducer, file-tree protocol
+state, Bash completion and escaping, the worktree path template, session
+location and detachment, the id coercion, the agent list, and the archive's
+split and ordering — have unit tests, most ported from the Android
 client's `LineDiffTest`, `MarkdownTest` and `WorktreeTest`:
 
 ```sh
@@ -406,8 +419,9 @@ or open `test/index.html` in a browser, which needs nothing installed at all.
 - **No fallback for pre-`/projects` servers.** The Android client degrades to an
   unscoped session list on a 404; this one requires a current server.
 - **Search and export** are new here.
-- **No keyboard shortcut layer.** The composer sends on Enter (Shift+Enter for a
-  newline) because a text input needs a submit gesture; nothing else is bound.
+- **No global keyboard shortcut layer.** The composer sends on Enter
+  (Shift+Enter for a newline), and Bash mode uses Tab and arrow keys for its
+  local path-completion menu.
 - **Bash mode** is here only, for now.
 
 ## Notes

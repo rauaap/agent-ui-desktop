@@ -13,6 +13,14 @@
 
 import { agentName, defaultAgent, normalizeAgents, preferredAgent } from '../js/agents.js';
 import { byArchivedAt, filedAt, isArchived, partition } from '../js/archive.js';
+import {
+  completionToken,
+  componentMatchIndex,
+  insertCompletion,
+  matchPaths,
+  shellEscape,
+} from '../js/completion.js';
+import { FileTreeCache, isWirePath } from '../js/file-tree-cache.js';
 import { ADD, DELETE, MAX_DIFF_LINES, diff } from '../js/render/diff.js';
 import { asProject, asSession, asWorktree, wireId } from '../js/ids.js';
 import { toHtml } from '../js/render/markdown.js';
@@ -435,6 +443,120 @@ test('reducer: rowText covers each row kind for search', () => {
   assertTrue(rowText(s.rows[0]).includes('refactor db'));
   assertTrue(rowText(s.rows[1]).includes('git status'));
   assertTrue(rowText(s.rows[2]).includes('boom'));
+});
+
+/* ------------------------------------------------------------------ */
+/* file tree and Bash completion                                      */
+/* ------------------------------------------------------------------ */
+
+const searchRows = (paths) => paths.map((path) => ({ path, lower: path.toLowerCase() }));
+
+test('file tree: a snapshot authoritatively replaces the cache', () => {
+  const cache = new FileTreeCache();
+  assertTrue(cache.apply({
+    type: 'file_tree_snapshot', generation: 'g1', revision: 0,
+    paths: ['README.md', 'src/', 'src/main.js'],
+  }));
+  assertEqual(cache.state, 'ready');
+  assertEqual(cache.paths.size, 3);
+  assertTrue(cache.apply({
+    type: 'file_tree_snapshot', generation: 'g2', revision: 0, paths: ['new.txt'],
+  }));
+  assertEqual([...cache.paths].join(), 'new.txt');
+  assertEqual(cache.generation, 'g2');
+});
+
+test('file tree: an ordered patch updates paths and revision', () => {
+  const cache = new FileTreeCache();
+  cache.apply({ type: 'file_tree_snapshot', generation: 'g', revision: 4, paths: ['old'] });
+  assertTrue(cache.apply({
+    type: 'file_tree_patch', generation: 'g', base_revision: 4, revision: 5,
+    added: ['dir/', 'dir/new'], removed: ['old'],
+  }));
+  assertEqual([...cache.paths].sort().join(), 'dir/,dir/new');
+  assertEqual(cache.revision, 5);
+});
+
+test('file tree: generation and base revision mismatches are rejected', () => {
+  const frame = (generation, base) => ({
+    type: 'file_tree_patch', generation, base_revision: base, revision: base + 1,
+    added: [], removed: [],
+  });
+  const cache = new FileTreeCache();
+  cache.apply({ type: 'file_tree_snapshot', generation: 'g', revision: 2, paths: [] });
+  assertTrue(!cache.apply(frame('other', 2)), 'unknown generation');
+  assertTrue(!cache.apply(frame('g', 1)), 'broken revision chain');
+  assertEqual(cache.revision, 2, 'a rejected patch applies nothing');
+});
+
+test('file tree: malformed snapshots and wire paths are rejected', () => {
+  const cache = new FileTreeCache();
+  assertTrue(!cache.apply({ type: 'file_tree_snapshot', generation: 'g', revision: -1, paths: [] }));
+  assertTrue(!cache.apply({ type: 'file_tree_snapshot', generation: 'g', revision: 0, paths: ['../x'] }));
+  assertTrue(isWirePath('empty/'));
+  assertTrue(!isWirePath('/absolute'));
+  assertTrue(!isWirePath('a/../b'));
+});
+
+test('file tree: disconnect state clears paths so stale completion is impossible', () => {
+  const cache = new FileTreeCache();
+  cache.apply({ type: 'file_tree_snapshot', generation: 'g', revision: 0, paths: ['old'] });
+  cache.unavailable('connection lost');
+  assertEqual(cache.state, 'unavailable');
+  assertEqual(cache.paths.size, 0);
+  assertEqual(cache.searchPaths.length, 0);
+  assertEqual(cache.message, 'connection lost');
+});
+
+test('completion: matching is case-insensitive at component boundaries', () => {
+  const paths = ['src/Utils/clean.py', 'scripts/utils.py', 'util.py', 'src/futile.py'];
+  assertEqual(matchPaths(searchRows(paths), 'UTIL').join(),
+    'util.py,src/Utils/clean.py,scripts/utils.py');
+  assertEqual(componentMatchIndex('src/futile.py', 'util'), -1);
+});
+
+test('completion: multi-component queries align literally', () => {
+  const paths = [
+    'scripts/display/', 'scripts/display/icon.svg', 'scripts/display_setup.py',
+    'tools/scripts/display.py', 'my_scripts/display.py', 'scripts/my_display.py',
+  ];
+  assertEqual(matchPaths(searchRows(paths), 'scripts/display').join(),
+    'scripts/display/,scripts/display/icon.svg,scripts/display_setup.py,tools/scripts/display.py');
+});
+
+test('completion: exact and full-path matches rank first', () => {
+  const paths = ['some/foo', 'foo/longer', 'foo', 'x/foo', 'FOO/'];
+  assertEqual(matchPaths(searchRows(paths), 'foo').join(),
+    'foo,FOO/,foo/longer,x/foo,some/foo');
+  assertEqual(matchPaths(searchRows(paths), '', 2).length, 2, 'display limit');
+});
+
+test('completion token: operators and whitespace bound the current token', () => {
+  const text = '!echo before | cat src/utZZ > out';
+  const cursor = text.indexOf('ZZ');
+  const token = completionToken(text, cursor);
+  assertEqual(token.query, 'src/ut');
+  assertEqual(text.slice(token.start, token.end), 'src/utZZ');
+  assertEqual(insertCompletion(text, token, 'src/utils.js'),
+    '!echo before | cat src/utils.js > out');
+});
+
+test('completion token: incomplete quotes and escapes decode safely', () => {
+  let text = "!cat 'my fi";
+  let token = completionToken(text, text.length);
+  assertEqual(token.query, 'my fi');
+  assertEqual(insertCompletion(text, token, 'my file.txt'), "!cat 'my file.txt'");
+
+  text = '!cat my\\ fi';
+  token = completionToken(text, text.length);
+  assertEqual(token.query, 'my fi');
+});
+
+test('completion insertion: shell syntax is quoted as one argument', () => {
+  assertEqual(shellEscape('src/main.js'), 'src/main.js');
+  assertEqual(shellEscape('a b/*.js'), "'a b/*.js'");
+  assertEqual(shellEscape("it\'s;bad"), "'it'\\''s;bad'");
+  assertEqual(shellEscape('directory/'), 'directory/', 'directory slash is preserved');
 });
 
 /* ------------------------------------------------------------------ */
