@@ -16,7 +16,7 @@
  * gives the renderer a single job: mirror rows into elements.
  */
 
-import { toolSummary } from './tools.js';
+import { actionLabel, actionSummary, isCanonicalAction, prettyJson } from './tools.js';
 import { isFormerWorktree } from './worktree.js';
 
 /**
@@ -268,6 +268,28 @@ function findRow(state, predicate) {
   return null;
 }
 
+const APPROVAL_KINDS = new Set(['allow_once', 'allow_always', 'reject_once', 'reject_always']);
+const exactEventKeys = (event, required, optional = []) => {
+  const keys = Object.keys(event);
+  return required.every((key) => keys.includes(key))
+    && keys.every((key) => required.includes(key) || optional.includes(key));
+};
+
+function validApprovalRequest(event) {
+  return exactEventKeys(event, ['type', 'request_id', 'call_id', 'action', 'options'], ['auto_approved'])
+    && typeof event.request_id === 'string' && event.request_id.length > 0
+    && typeof event.call_id === 'string' && event.call_id.length > 0
+    && isCanonicalAction(event.action)
+    && Array.isArray(event.options)
+    && event.options.every((option) => option && typeof option === 'object'
+      && !Array.isArray(option)
+      && Object.keys(option).every((key) => ['id', 'name', 'kind'].includes(key))
+      && typeof option.id === 'string' && option.id.length > 0
+      && typeof option.name === 'string' && option.name.length > 0
+      && APPROVAL_KINDS.has(option.kind))
+    && (event.auto_approved === undefined || event.auto_approved === true);
+}
+
 /**
  * The reducer proper: mutate `state` for one event and return the list of
  * changes a view needs to apply. Exported for tests.
@@ -345,25 +367,29 @@ export function reduce(state, event) {
       break;
     }
 
-    case 'tool_use':
+    case 'tool_use': {
       state.openBubble = null;
-      state.lastTool = append(state, {
+      const canonical = exactEventKeys(event, ['type', 'call_id', 'action'])
+        && typeof event.call_id === 'string' && event.call_id.length > 0
+        && isCanonicalAction(event.action);
+      const row = append(state, {
         kind: 'tool',
-        tool: event.tool || 'tool',
-        input: event.input ?? {},
+        callId: canonical ? event.call_id : null,
+        action: canonical ? event.action : null,
+        rawEvent: canonical ? null : event,
+        legacy: !Object.hasOwn(event, 'action'),
       }, changes);
+      state.lastTool = canonical ? row : null;
       break;
+    }
 
     case 'approval_request': {
       state.openBubble = null;
-      const tool = event.tool || 'tool';
-      const input = event.input ?? {};
-      // This approval is for the tool_use we just rendered: drop that row so
-      // the command or edit isn't shown twice — the approval card replaces it.
+      const canonical = validApprovalRequest(event);
+      // Only invocation identity can replace a call card. The approval repeats
+      // its action, so rendering never depends on the removed row.
       const previous = state.lastTool;
-      if (previous
-          && previous.tool === tool
-          && toolSummary(tool, input) === toolSummary(previous.tool, previous.input)) {
+      if (canonical && previous && previous.callId === event.call_id) {
         const index = state.rows.indexOf(previous);
         if (index >= 0) {
           state.rows.splice(index, 1);
@@ -372,19 +398,21 @@ export function reduce(state, event) {
       }
       state.lastTool = null;
 
-      const auto = event.auto_approved === true;
+      const auto = canonical && event.auto_approved === true;
       const row = append(state, {
         kind: 'approval',
-        id: event.request_id ?? '',
-        tool,
-        input,
-        category: event.category ?? '',
+        id: canonical ? event.request_id : '',
+        callId: canonical ? event.call_id : null,
+        action: canonical ? event.action : null,
+        rawEvent: canonical ? null : event,
+        legacy: !Object.hasOwn(event, 'action'),
         auto,
-        options: Array.isArray(event.options) ? event.options : null,
+        options: canonical ? event.options : [],
         // An auto-approved request never blocks, so it is born resolved.
         resolved: auto ? { behavior: 'allow', auto: true, message: null } : null,
       }, changes);
-      if (!auto) state.pendingApprovalId = row.id;
+      // Legacy and malformed approvals are display-only.
+      if (canonical && !auto) state.pendingApprovalId = row.id;
       break;
     }
 
@@ -401,6 +429,7 @@ export function reduce(state, event) {
 
     case 'question': {
       state.openBubble = null;
+      state.lastTool = null;
       const row = append(state, {
         kind: 'question',
         id: event.request_id ?? '',
@@ -506,9 +535,13 @@ export function rowText(row) {
     case 'agent':
       return row.text;
     case 'tool':
-      return `${row.tool} ${toolSummary(row.tool, row.input)}`;
+      return row.action
+        ? `${actionLabel(row.action)} ${actionSummary(row.action)} ${prettyJson(row.action)}`
+        : prettyJson(row.rawEvent);
     case 'approval':
-      return `${row.tool} ${toolSummary(row.tool, row.input)} ${row.resolved?.message ?? ''}`;
+      return row.action
+        ? `${actionLabel(row.action)} ${actionSummary(row.action)} ${prettyJson(row.action)} ${row.resolved?.message ?? ''}`
+        : prettyJson(row.rawEvent);
     case 'question':
       return row.questions.map((q) => {
         const options = (q.options || []).map((o) => o.label).join(' ');
@@ -542,17 +575,27 @@ export function toMarkdown(state) {
         parts.push('### Agent', '', row.text, '');
         break;
       case 'tool':
-        parts.push(`**${row.tool}** — \`${toolSummary(row.tool, row.input)}\``, '');
-        parts.push('```json', JSON.stringify(row.input, null, 2), '```', '');
+        if (row.action) {
+          parts.push(`**${actionLabel(row.action)}** — \`${actionSummary(row.action)}\``, '');
+          parts.push('```json', JSON.stringify(row.action, null, 2), '```', '');
+        } else {
+          parts.push(row.legacy ? '**Legacy event from an older server version**' : '**Malformed tool event**', '');
+          parts.push('```json', JSON.stringify(row.rawEvent, null, 2), '```', '');
+        }
         break;
       case 'approval': {
+        if (!row.action) {
+          parts.push(row.legacy ? '**Legacy event from an older server version**' : '**Malformed approval event**', '');
+          parts.push('```json', JSON.stringify(row.rawEvent, null, 2), '```', '');
+          break;
+        }
         const verdict = !row.resolved
           ? 'pending'
           : row.resolved.behavior === 'allow'
             ? (row.resolved.auto ? 'auto-approved' : 'allowed')
             : row.resolved.behavior === 'deny' ? 'denied' : 'unresolved';
-        parts.push(`**Approval — ${row.tool}** (${verdict})`, '');
-        parts.push('```json', JSON.stringify(row.input, null, 2), '```', '');
+        parts.push(`**Approval — ${actionLabel(row.action)}** (${verdict})`, '');
+        parts.push('```json', JSON.stringify(row.action, null, 2), '```', '');
         if (row.resolved?.message) parts.push(`> ${row.resolved.message}`, '');
         break;
       }

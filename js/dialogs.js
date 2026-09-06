@@ -885,7 +885,7 @@ export function sessionSettingsDialog(state) {
       writeToggle = toggle(
         body,
         'Auto-approve writes',
-        'Write, Edit and MultiEdit run without asking.',
+        'File edits and writes run without asking.',
         state.autoApproveWrite,
       );
       commandToggle = toggle(

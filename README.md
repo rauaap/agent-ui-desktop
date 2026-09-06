@@ -105,7 +105,7 @@ js/
   agents.js           the server's agent list, normalized — nothing hardcoded
   socket.js           selected-session WebSocket: backoff + buffered replay
   store.js            selected-session state and transcript reducer — no DOM
-  tools.js            pure helpers over tool_use payloads
+  tools.js            canonical action validation, labels, and summaries
   sidebar.js          the project/session tree, and the archive below it
   archive.js          reading `archived_at`: split, order, label — no DOM
   workspace.js        selected pane and socket lifecycle
@@ -118,7 +118,7 @@ js/
   render/
     markdown.js       markdown subset -> HTML (port of Markdown.java)
     diff.js           LCS line diff (port of LineDiff.java)
-    toolformat.js     tool_use -> diffs and command blocks (ToolFormat.java)
+    toolformat.js     canonical actions -> diffs and command blocks
     transcript.js     store rows -> DOM, append-only
 test/                 unit tests: open test/index.html, or `node test/run.js`
 ```

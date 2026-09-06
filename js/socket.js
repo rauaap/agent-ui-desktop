@@ -10,6 +10,7 @@
  */
 
 import { wsBase } from './api.js';
+import { approvalResponsePayload } from './tools.js';
 
 const BASE_DELAY = 1000;
 const MAX_DELAY = 15000;
@@ -114,10 +115,7 @@ export class SessionSocket {
   }
 
   sendApproval(requestId, behavior, optionId, message) {
-    const payload = { type: 'approval_response', request_id: requestId, behavior };
-    if (optionId) payload.option_id = optionId;
-    if (message) payload.message = message;
-    return this.send(payload);
+    return this.send(approvalResponsePayload(requestId, behavior, optionId, message));
   }
 
   sendAnswers(requestId, answers) {

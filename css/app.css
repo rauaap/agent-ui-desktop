@@ -717,6 +717,18 @@ body.sidebar-resizing * { cursor: col-resize !important; user-select: none !impo
   color: var(--muted);
 }
 
+.action-body { position: relative; }
+.action-copy {
+  margin-top: 7px;
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--faint);
+  font-size: 11px;
+}
+.action-copy:hover { color: var(--accent-strong); background: var(--panel-hover); }
+.protocol-fallback .card-head .tool { color: var(--muted); }
+
 /* approvals -------------------------------------------------------- */
 
 .approval-bar {

@@ -8,7 +8,7 @@
  */
 
 import { bashOutputText, bashStatus, rowText } from '../store.js';
-import { prettyJson, toolSummary } from '../tools.js';
+import { actionLabel, actionSummary, prettyJson } from '../tools.js';
 import { toHtml } from './markdown.js';
 import { toolBody } from './toolformat.js';
 
@@ -249,38 +249,38 @@ export class TranscriptView {
   }
 
   buildTool(row) {
+    if (!row.action) return fallbackCard(row);
+
     const card = el('div', 'row card');
     const head = el('button', 'card-head');
     head.appendChild(el('span', 'twisty', '▸'));
-    head.appendChild(el('span', 'tool', row.tool.toUpperCase()));
-    head.appendChild(el('span', 'summary', toolSummary(row.tool, row.input)));
+    head.appendChild(el('span', 'tool', actionLabel(row.action)));
+    head.appendChild(el('span', 'summary', actionSummary(row.action)));
     head.addEventListener('click', () => card.classList.toggle('open'));
     card.appendChild(head);
 
     const body = el('div', 'card-body');
-    body.appendChild(toolBody(row.tool, row.input) || rawBlock(row.input));
+    body.appendChild(actionBody(row.action));
     card.appendChild(body);
     return card;
   }
 
   buildApproval(row) {
+    if (!row.action) return fallbackCard(row);
+
     const pending = !row.resolved;
     const card = el('div', `row card${pending ? ' awaiting' : ''}${row.auto ? ' auto' : ''}`);
     if (row.resolved?.behavior === 'deny') card.classList.add('resolved-deny');
 
-    // The head names the request; the verdict row below reports the outcome.
-    // Saying "auto-approved" in both just repeats itself.
     const head = el('div', 'card-head');
     head.appendChild(el('span', 'tool', pending ? 'APPROVAL REQUIRED' : 'APPROVAL'));
-    head.appendChild(el('span', 'summary', `${row.tool} · ${toolSummary(row.tool, row.input)}`));
+    head.appendChild(el('span', 'summary', `${actionLabel(row.action)} · ${actionSummary(row.action)}`));
     card.appendChild(head);
 
-    // The command or edit, shown expanded — this is what you are approving.
+    // Render from the approval's repeated action, never from the tool row it replaced.
     const body = el('div', 'card-body');
     body.style.display = 'block';
-    const formatted = toolBody(row.tool, row.input);
-    body.appendChild(formatted || rawBlock(row.input));
-    if (formatted) body.appendChild(rawToggle(row.input));
+    body.appendChild(actionBody(row.action, true));
     card.appendChild(body);
 
     if (pending) card.appendChild(this.buildApprovalControls(row, card));
@@ -477,17 +477,53 @@ export class TranscriptView {
 /* small pieces                                                       */
 /* ------------------------------------------------------------------ */
 
-function rawBlock(input) {
-  const pre = el('pre', 'tool-block', prettyJson(input));
-  return pre;
+function rawBlock(value) {
+  return el('pre', 'tool-block', prettyJson(value));
 }
 
-/** A collapsed "raw input" disclosure that reveals the full JSON. */
-function rawToggle(input) {
+function actionBody(action, expanded = false) {
+  const wrap = el('div', 'action-body');
+  const formatted = toolBody(action);
+  if (formatted) {
+    wrap.appendChild(formatted);
+    if (action.kind === 'command') {
+      const copy = el('button', 'copy action-copy', 'Copy command');
+      copy.addEventListener('click', async () => {
+        await copyText(action.command);
+        copy.textContent = 'Copied';
+        setTimeout(() => { copy.textContent = 'Copy command'; }, 1200);
+      });
+      wrap.appendChild(copy);
+    }
+    wrap.appendChild(rawToggle(action));
+  } else if (action.kind === 'other') {
+    wrap.appendChild(rawBlock(action.arguments));
+  } else {
+    wrap.appendChild(rawBlock(action));
+  }
+  if (expanded) wrap.classList.add('expanded');
+  return wrap;
+}
+
+/** A collapsed disclosure of the provider-neutral action. */
+function rawToggle(action) {
   const details = el('details', 'raw-toggle');
-  details.appendChild(el('summary', null, 'raw input'));
-  details.appendChild(el('pre', null, prettyJson(input)));
+  details.appendChild(el('summary', null, 'action details'));
+  details.appendChild(el('pre', null, prettyJson(action)));
   return details;
+}
+
+function fallbackCard(row) {
+  const card = el('div', 'row card protocol-fallback open');
+  const head = el('div', 'card-head');
+  head.appendChild(el('span', 'tool', row.legacy
+    ? 'LEGACY EVENT FROM AN OLDER SERVER VERSION'
+    : `MALFORMED ${row.kind === 'approval' ? 'APPROVAL' : 'TOOL'} EVENT`));
+  card.appendChild(head);
+  const body = el('div', 'card-body');
+  body.appendChild(rawBlock(row.rawEvent));
+  card.appendChild(body);
+  return card;
 }
 
 function verdictRow(row) {
@@ -502,7 +538,6 @@ function verdictRow(row) {
   const behavior = row.resolved?.behavior;
   if (behavior === 'allow') {
     wrap.appendChild(el('span', 'tag allow', row.resolved.auto ? 'AUTO-APPROVED' : 'ALLOWED'));
-    if (row.auto && row.category) wrap.appendChild(el('span', null, row.category));
   } else if (behavior === 'deny') {
     wrap.appendChild(el('span', 'tag deny', 'DENIED'));
     if (row.resolved.message) wrap.appendChild(el('span', null, row.resolved.message));

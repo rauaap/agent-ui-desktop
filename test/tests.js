@@ -17,7 +17,7 @@ import { ADD, DELETE, MAX_DIFF_LINES, diff } from '../js/render/diff.js';
 import { asProject, asSession, asWorktree, wireId } from '../js/ids.js';
 import { toHtml } from '../js/render/markdown.js';
 import { Store, parseComposerInput, reduce, rowText } from '../js/store.js';
-import { toolSummary } from '../js/tools.js';
+import { actionSummary, approvalResponsePayload, isCanonicalAction } from '../js/tools.js';
 import {
   DEFAULT_TEMPLATE,
   absolutize,
@@ -219,18 +219,38 @@ test('md: blank line separates paragraphs', () => {
 });
 
 /* ------------------------------------------------------------------ */
-/* tool summary                                                       */
+/* canonical actions                                                  */
 /* ------------------------------------------------------------------ */
 
-test('summary: known tools pick their identifying field', () => {
-  assertEqual(toolSummary('Bash', { command: 'ls -la' }), 'ls -la');
-  assertEqual(toolSummary('Edit', { file_path: '/a/b.py' }), '/a/b.py');
-  assertEqual(toolSummary('Grep', { pattern: 'TODO' }), 'TODO');
+const commandAction = (command) => ({ kind: 'command', command, shell: 'bash' });
+
+test('actions: summaries dispatch only on canonical kind', () => {
+  assertEqual(actionSummary(commandAction('ls -la')), 'ls -la');
+  assertEqual(actionSummary({ kind: 'edit', path: '/a/b.py', edits: [{ old_text: 'a', new_text: 'b' }] }), '/a/b.py');
+  assertEqual(actionSummary({ kind: 'search', mode: 'content', query: 'TODO', path: 'src' }), 'TODO · src');
+  assertEqual(actionSummary({ kind: 'list' }), 'current directory');
 });
 
-test('summary: unknown tool falls back to first non-empty string', () => {
-  assertEqual(toolSummary('Mystery', { foo: '', bar: 'hi' }), 'hi');
-  assertEqual(toolSummary('Mystery', {}), '');
+test('actions: every canonical kind validates', () => {
+  const actions = [
+    commandAction('pwd'),
+    { kind: 'read', path: 'a.js', offset: 1, limit: 2 },
+    { kind: 'edit', path: 'a.js', edits: [{ old_text: 'a', new_text: '' }, { old_text: 'b', new_text: 'c', replace_all: true }] },
+    { kind: 'write', path: 'a.js', content: '' },
+    { kind: 'search', mode: 'files', query: '*.js' },
+    { kind: 'list' },
+    { kind: 'web', operation: 'fetch', url: 'https://example.com' },
+    { kind: 'task', description: 'Inspect it', agent: 'Explore' },
+    { kind: 'other', name: 'Deploy', arguments: { target: 'staging' } },
+  ];
+  assertTrue(actions.every(isCanonicalAction));
+});
+
+test('actions: malformed and extended actions fail safely', () => {
+  assertTrue(!isCanonicalAction({ kind: 'command', command: '' }));
+  assertTrue(!isCanonicalAction({ kind: 'read', path: 'a', limit: 1.5 }));
+  assertTrue(!isCanonicalAction({ kind: 'write', path: 'a', content: '', provider: 'pi' }));
+  assertTrue(!isCanonicalAction({ kind: 'future', value: true }));
 });
 
 /* ------------------------------------------------------------------ */
@@ -271,35 +291,37 @@ test('reducer: consecutive output chunks coalesce', () => {
   assertEqual(s.rows[0].text, 'Hello');
 });
 
-test('reducer: a tool_use closes the open agent message', () => {
+test('reducer: a canonical tool_use closes the open agent message', () => {
   const s = feed(freshState(),
     { type: 'output', text: 'a' },
-    { type: 'tool_use', tool: 'Bash', input: { command: 'ls' } },
+    { type: 'tool_use', call_id: 'c1', action: commandAction('ls') },
     { type: 'output', text: 'b' });
   assertEqual(s.rows.length, 3);
-  assertEqual(s.rows[0].text, 'a');
+  assertEqual(s.rows[1].callId, 'c1');
   assertEqual(s.rows[2].text, 'b');
 });
 
-test('reducer: approval replaces the tool_use it duplicates', () => {
+test('reducer: approval replaces only the tool_use with the same call_id', () => {
+  const action = commandAction('ls');
   const s = feed(freshState(),
-    { type: 'tool_use', tool: 'Bash', input: { command: 'ls' } },
-    { type: 'approval_request', request_id: 'p1', tool: 'Bash', input: { command: 'ls' } });
+    { type: 'tool_use', call_id: 'c1', action },
+    { type: 'approval_request', request_id: 'p1', call_id: 'c1', action, options: [] });
   assertEqual(s.rows.length, 1, 'the tool card should have been swallowed');
   assertEqual(s.rows[0].kind, 'approval');
   assertEqual(s.pendingApprovalId, 'p1');
 });
 
-test('reducer: approval for a different call keeps both rows', () => {
+test('reducer: identical calls with different IDs are not confused', () => {
+  const action = commandAction('ls');
   const s = feed(freshState(),
-    { type: 'tool_use', tool: 'Bash', input: { command: 'ls' } },
-    { type: 'approval_request', request_id: 'p1', tool: 'Bash', input: { command: 'rm -rf /' } });
+    { type: 'tool_use', call_id: 'c1', action },
+    { type: 'approval_request', request_id: 'p1', call_id: 'c2', action, options: [] });
   assertEqual(s.rows.length, 2);
 });
 
-test('reducer: approval_response resolves the card', () => {
+test('reducer: approval_response resolves the canonical card', () => {
   const s = feed(freshState(),
-    { type: 'approval_request', request_id: 'p1', tool: 'Bash', input: { command: 'ls' } },
+    { type: 'approval_request', request_id: 'p1', call_id: 'c1', action: commandAction('ls'), options: [] },
     { type: 'approval_response', request_id: 'p1', behavior: 'deny', message: 'no' });
   assertEqual(s.rows[0].resolved.behavior, 'deny');
   assertEqual(s.rows[0].resolved.message, 'no');
@@ -308,23 +330,51 @@ test('reducer: approval_response resolves the card', () => {
 
 test('reducer: an auto-approved request is born resolved and never pending', () => {
   const s = feed(freshState(), {
-    type: 'approval_request',
-    request_id: 'p1',
-    tool: 'Bash',
-    input: { command: 'ls' },
-    category: 'command',
-    auto_approved: true,
+    type: 'approval_request', request_id: 'p1', call_id: 'c1',
+    action: commandAction('ls'), options: [], auto_approved: true,
   });
   assertEqual(s.pendingApprovalId, null);
   assertEqual(s.rows[0].resolved.behavior, 'allow');
   assertTrue(s.rows[0].auto);
 });
 
+test('approval response: empty options use behavior, named options use option_id', () => {
+  const generic = approvalResponsePayload('p1', 'deny', null, 'not now');
+  assertEqual(generic.behavior, 'deny');
+  assertEqual(generic.option_id, undefined);
+  const named = approvalResponsePayload('p1', 'allow', 'always', null);
+  assertEqual(named.option_id, 'always');
+  assertEqual(named.behavior, undefined);
+});
+
+test('reducer: legacy events retain complete JSON and are display-only', () => {
+  const event = { type: 'approval_request', request_id: 'old', tool: 'Bash', input: { command: 'ls' } };
+  const s = feed(freshState(), event);
+  assertTrue(s.rows[0].legacy);
+  assertEqual(s.rows[0].rawEvent, event);
+  assertEqual(s.pendingApprovalId, null);
+});
+
+test('reducer: malformed canonical actions use the generic fallback', () => {
+  const event = { type: 'tool_use', call_id: 'c1', action: { kind: 'command', command: 42 } };
+  const s = feed(freshState(), event);
+  assertEqual(s.rows[0].action, null);
+  assertTrue(!s.rows[0].legacy);
+});
+
+test('reducer: obsolete approval category makes the event display-only', () => {
+  const event = {
+    type: 'approval_request', request_id: 'p1', call_id: 'c1',
+    action: commandAction('ls'), options: [], category: 'command',
+  };
+  const s = feed(freshState(), event);
+  assertEqual(s.rows[0].action, null);
+  assertEqual(s.pendingApprovalId, null);
+});
+
 test('reducer: leaving awaiting_approval strands nothing', () => {
-  // A stop, or the process dying, ends the block without a response; the card
-  // must stop offering buttons.
   const s = feed(freshState(),
-    { type: 'approval_request', request_id: 'p1', tool: 'Bash', input: { command: 'ls' } },
+    { type: 'approval_request', request_id: 'p1', call_id: 'c1', action: commandAction('ls'), options: [] },
     { type: 'status', status: 'idle' });
   assertEqual(s.pendingApprovalId, null);
   assertTrue(s.rows[0].resolved, 'card should be resolved');
@@ -380,7 +430,7 @@ test('store: an aborted replay leaves the visible transcript alone', () => {
 test('reducer: rowText covers each row kind for search', () => {
   const s = feed(freshState(),
     { type: 'input', text: 'refactor db' },
-    { type: 'tool_use', tool: 'Bash', input: { command: 'git status' } },
+    { type: 'tool_use', call_id: 'c1', action: commandAction('git status') },
     { type: 'error', message: 'boom' });
   assertTrue(rowText(s.rows[0]).includes('refactor db'));
   assertTrue(rowText(s.rows[1]).includes('git status'));
