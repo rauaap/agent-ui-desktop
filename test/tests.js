@@ -24,6 +24,7 @@ import { FileTreeCache, isWirePath } from '../js/file-tree-cache.js';
 import { ADD, DELETE, MAX_DIFF_LINES, diff } from '../js/render/diff.js';
 import { asProject, asSession, asWorktree, wireId } from '../js/ids.js';
 import { toHtml } from '../js/render/markdown.js';
+import { composerEntries, MessageHistory } from '../js/message-history.js';
 import { Store, parseComposerInput, reduce, rowText } from '../js/store.js';
 import { actionSummary, approvalResponsePayload, isCanonicalAction } from '../js/tools.js';
 import {
@@ -611,6 +612,37 @@ test('completion insertion: shell syntax is quoted as one argument', () => {
   assertEqual(shellEscape('a b/*.js'), "'a b/*.js'");
   assertEqual(shellEscape("it\'s;bad"), "'it'\\''s;bad'");
   assertEqual(shellEscape('directory/'), 'directory/', 'directory slash is preserved');
+});
+
+/* ------------------------------------------------------------------ */
+/* composer history                                                   */
+/* ------------------------------------------------------------------ */
+
+test('history: up walks backward and down restores the draft', () => {
+  const history = new MessageHistory(['first', 'second']);
+  assertEqual(history.previous('unfinished'), 'second');
+  assertEqual(history.previous('ignored while browsing'), 'first');
+  assertEqual(history.previous(''), 'first', 'oldest entry is the boundary');
+  assertEqual(history.next(), 'second');
+  assertEqual(history.next(), 'unfinished');
+  assertEqual(history.next(), null, 'down outside history is left to the textarea');
+});
+
+test('history: typing resets traversal and preserves the edited draft', () => {
+  const history = new MessageHistory(['one', 'two']);
+  assertEqual(history.previous('draft'), 'two');
+  history.resetNavigation();
+  assertEqual(history.previous('edited'), 'two');
+  assertEqual(history.next(), 'edited');
+});
+
+test('history: transcript prompts and commands retain composer semantics', () => {
+  assertEqual(composerEntries([
+    { kind: 'user', text: 'hello' },
+    { kind: 'agent', text: 'hi' },
+    { kind: 'user', text: '!literal prompt' },
+    { kind: 'bash', command: 'git status' },
+  ]).join('|'), 'hello|\\!literal prompt|!git status');
 });
 
 /* ------------------------------------------------------------------ */

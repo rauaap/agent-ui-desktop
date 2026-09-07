@@ -13,6 +13,7 @@ import {
   matchPaths,
 } from './completion.js';
 import { FileTreeSocket } from './file-tree.js';
+import { composerEntries, composerEntry, MessageHistory } from './message-history.js';
 import { isBusy, parseComposerInput, toMarkdown } from './store.js';
 import { SessionSocket } from './socket.js';
 import { TranscriptView } from './render/transcript.js';
@@ -48,6 +49,10 @@ export class SessionPane {
     this.completionOpen = false;
     this.completionResults = [];
     this.completionIndex = 0;
+    this.messageHistory = new MessageHistory(composerEntries(store.session(sessionId).rows));
+    // Successful sends are added immediately, before their server echo arrives.
+    // This queue prevents those echoes from adding the same entry a second time.
+    this.pendingHistoryEchoes = [];
     this.fileTree = new FileTreeSocket(sessionId, () => {
       if (this.completionOpen) this.renderCompletions();
     });
@@ -83,6 +88,18 @@ export class SessionPane {
 
     this.unsubscribe = store.subscribe(sessionId, (changes) => {
       if (changes.some((c) => c.op === 'meta' || c.op === 'reset')) this.refresh();
+      if (changes.some((c) => c.op === 'reset')) {
+        this.messageHistory.replace(composerEntries(store.session(sessionId).rows));
+        this.pendingHistoryEchoes = [];
+      } else {
+        for (const change of changes) {
+          if (change.op !== 'append') continue;
+          const entry = composerEntry(change.row);
+          if (entry === null) continue;
+          if (this.pendingHistoryEchoes[0] === entry) this.pendingHistoryEchoes.shift();
+          else this.messageHistory.add(entry);
+        }
+      }
     });
 
     this.refresh();
@@ -167,6 +184,9 @@ export class SessionPane {
     this.input.rows = 1;
     this.input.placeholder = 'Send a prompt…';
     this.input.addEventListener('input', () => {
+      // Typing after recalling an entry starts a fresh history traversal; the
+      // edited value is then preserved as the draft on the next ArrowUp.
+      this.messageHistory.resetNavigation();
       this.autoGrow();
       this.paintMode();
       if (this.completionOpen) this.renderCompletions();
@@ -203,6 +223,17 @@ export class SessionPane {
         this.acceptCompletion(this.completionIndex);
         return;
       }
+      if (!event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey
+          && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
+        const value = event.key === 'ArrowUp'
+          ? this.messageHistory.previous(this.input.value)
+          : this.messageHistory.next();
+        if (value !== null) {
+          event.preventDefault();
+          this.setComposerValue(value);
+        }
+        return;
+      }
       // Enter sends, Shift+Enter inserts a newline. This is the input's submit
       // gesture, not a shortcut layer.
       if (event.key === 'Enter' && !event.shiftKey) {
@@ -235,6 +266,14 @@ export class SessionPane {
 
     composer.append(this.completionMenu, this.input, this.completionButton, this.sendButton);
     return composer;
+  }
+
+  /** Replace composer text while keeping its derived styling and size current. */
+  setComposerValue(value) {
+    this.input.value = value;
+    this.input.setSelectionRange(value.length, value.length);
+    this.autoGrow();
+    this.paintMode();
   }
 
   /**
@@ -328,6 +367,7 @@ export class SessionPane {
     const cursor = next.length - (this.input.value.length - token.end);
     this.input.value = next;
     this.input.setSelectionRange(cursor, cursor);
+    this.messageHistory.resetNavigation();
     this.autoGrow();
     this.paintMode();
     this.hideCompletions();
@@ -382,6 +422,11 @@ export class SessionPane {
       }
     }
 
+    const historyEntry = parsed.kind === 'bash'
+      ? `!${parsed.command}`
+      : parsed.text.startsWith('!') ? `\\${parsed.text}` : parsed.text;
+    this.messageHistory.add(historyEntry);
+    this.pendingHistoryEchoes.push(historyEntry);
     this.input.value = '';
     this.hideCompletions();
     this.autoGrow();

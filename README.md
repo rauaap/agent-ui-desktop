@@ -107,6 +107,7 @@ js/
   file-tree.js        lazy file-tree WebSocket and reconnect lifecycle
   file-tree-cache.js  validated snapshot/patch cache — no DOM
   completion.js       local path matching, shell token parsing and escaping
+  message-history.js  prompt/command recall and draft restoration — no DOM
   store.js            selected-session state and transcript reducer — no DOM
   tools.js            canonical action validation, labels, and summaries
   sidebar.js          the project/session tree, and the archive below it
@@ -207,6 +208,11 @@ first-token path beginning with `!` keeps the prompt's `\!` literal escape so
 completion cannot silently select Bash mode. A typed `./` prefix is also
 preserved even though synchronized paths are normalized. A directory's trailing
 slash is preserved, and no completion query or `@` syntax is sent to the server.
+
+With the completion menu closed, **Up** and **Down** walk through the session's
+prompt and command history. History is recovered from replayed transcript rows,
+and moving down past the newest entry restores the unsent draft that was in the
+composer before navigation began. Typing after recall starts a new traversal.
 
 ### Project settings report; they do not edit
 
@@ -423,8 +429,9 @@ or open `test/index.html` in a browser, which needs nothing installed at all.
   unscoped session list on a 404; this one requires a current server.
 - **Search and export** are new here.
 - **No global keyboard shortcut layer.** The composer sends on Enter
-  (Shift+Enter for a newline), and Tab and arrow keys operate its local
-  path-completion menu in both prompt and Bash modes.
+  (Shift+Enter for a newline). Tab operates its local path-completion menu;
+  arrows select completions while that menu is open and otherwise recall
+  prompt/command history.
 - **Bash mode** is here only, for now.
 
 ## Notes
