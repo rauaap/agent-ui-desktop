@@ -12,8 +12,8 @@ import { actionLabel, actionSummary, prettyJson } from '../tools.js';
 import { toHtml } from './markdown.js';
 import { toolBody } from './toolformat.js';
 
-/** How close to the bottom still counts as "following along", in pixels. */
-const STICK_SLACK = 60;
+/** Allow for fractional layout coordinates when deciding whether we are at the end. */
+const BOTTOM_EPSILON = 1;
 
 const el = (tag, className, text) => {
   const node = document.createElement(tag);
@@ -45,19 +45,21 @@ export class TranscriptView {
     this.scrollButton.addEventListener('click', () => this.scrollToBottom());
     this.wrap.appendChild(this.scrollButton);
 
-    this.stick = true;
+    // This remembers the position from before a resize: by the time the observer
+    // runs, a formerly-bottomed transcript may already have grown beneath the
+    // viewport and can no longer be identified from its current geometry.
+    this.followBottom = true;
     this.list.addEventListener('scroll', () => {
-      this.stick = this.distanceFromBottom() <= STICK_SLACK;
+      this.followBottom = this.isAtBottom();
       this.updateScrollButton();
     });
 
     // Anything that changes the transcript's width or height reflows every row
     // and so moves the bottom: a zoom change, a window resize, the sidebar being
-    // collapsed, the composer growing under a long prompt. A reader who was
-    // following along should still be at the bottom afterwards rather than
-    // stranded part way up what they were watching stream.
+    // collapsed, the composer growing under a long prompt. A reader who was at
+    // the bottom should still follow it; every other reader keeps their offset.
     this.resizeObserver = new ResizeObserver(() => {
-      if (this.stick) this.scrollToBottom();
+      if (this.followBottom) this.scrollToBottom();
       else this.updateScrollButton();
     });
     this.resizeObserver.observe(this.list);
@@ -77,13 +79,18 @@ export class TranscriptView {
   /* ---------------------------------------------------------------- */
 
   applyChanges(changes) {
-    const wasStuck = this.stick;
+    // Snapshot the geometry before touching the DOM. Content growth changes the
+    // answer, but should only be followed when the reader was already at the
+    // bottom. A reconnect reset represents the same conversation and follows
+    // the same rule instead of unconditionally jumping to the latest row.
+    const wasAtBottom = this.isAtBottom();
+    const previousScrollTop = this.list.scrollTop;
     let touched = false;
 
     for (const change of changes) {
       switch (change.op) {
         case 'reset':
-          this.rebuild();
+          this.rebuild({ wasAtBottom, scrollTop: previousScrollTop });
           return;
         case 'append': {
           const node = this.build(change.row);
@@ -114,7 +121,10 @@ export class TranscriptView {
         }
         case 'remove': {
           const node = this.nodes.get(change.row.key);
-          if (node) node.remove();
+          if (node) {
+            node.remove();
+            touched = true;
+          }
           this.nodes.delete(change.row.key);
           break;
         }
@@ -123,11 +133,11 @@ export class TranscriptView {
       }
     }
 
-    if (touched && wasStuck) this.scrollToBottom();
+    if (touched) this.restoreScroll(wasAtBottom, previousScrollTop);
     else this.updateScrollButton();
   }
 
-  rebuild() {
+  rebuild(position = null) {
     const state = this.store.session(this.sessionId);
     this.nodes.clear();
     this.list.replaceChildren();
@@ -140,7 +150,8 @@ export class TranscriptView {
       fragment.appendChild(node);
     }
     this.list.appendChild(fragment);
-    this.scrollToBottom();
+    if (position) this.restoreScroll(position.wasAtBottom, position.scrollTop);
+    else this.scrollToBottom();
   }
 
   /* ---------------------------------------------------------------- */
@@ -151,14 +162,26 @@ export class TranscriptView {
     return this.list.scrollHeight - this.list.scrollTop - this.list.clientHeight;
   }
 
+  isAtBottom() {
+    return this.distanceFromBottom() <= BOTTOM_EPSILON;
+  }
+
+  /** Restore an offset after transcript content has been appended or replaced. */
+  restoreScroll(wasAtBottom, scrollTop) {
+    this.followBottom = wasAtBottom;
+    if (wasAtBottom) this.list.scrollTop = this.list.scrollHeight;
+    else this.list.scrollTop = scrollTop;
+    this.updateScrollButton();
+  }
+
   scrollToBottom() {
-    this.stick = true;
+    this.followBottom = true;
     this.list.scrollTop = this.list.scrollHeight;
     this.updateScrollButton();
   }
 
   updateScrollButton() {
-    this.scrollButton.classList.toggle('show', this.distanceFromBottom() > STICK_SLACK);
+    this.scrollButton.classList.toggle('show', !this.isAtBottom());
   }
 
   /* ---------------------------------------------------------------- */
