@@ -10,7 +10,6 @@ import { filedLabel } from './archive.js';
 import {
   completionToken,
   insertCompletion,
-  isBashComposer,
   matchPaths,
 } from './completion.js';
 import { FileTreeSocket } from './file-tree.js';
@@ -49,7 +48,6 @@ export class SessionPane {
     this.completionOpen = false;
     this.completionResults = [];
     this.completionIndex = 0;
-    this.wasBash = false;
     this.fileTree = new FileTreeSocket(sessionId, () => {
       if (this.completionOpen) this.renderCompletions();
     });
@@ -170,14 +168,11 @@ export class SessionPane {
     this.input.placeholder = 'Send a prompt…';
     this.input.addEventListener('input', () => {
       this.autoGrow();
-      const bash = this.paintMode();
-      if (bash && !this.wasBash) this.fileTree.open(true);
-      this.wasBash = bash;
-      if (!bash) this.hideCompletions();
-      else if (this.completionOpen) this.renderCompletions();
+      this.paintMode();
+      if (this.completionOpen) this.renderCompletions();
     });
     this.input.addEventListener('keydown', (event) => {
-      if (isBashComposer(this.input.value) && event.key === 'Tab') {
+      if (event.key === 'Tab') {
         event.preventDefault();
         if (this.completionOpen && this.completionResults.length) {
           const step = event.shiftKey ? -1 : 1;
@@ -220,8 +215,15 @@ export class SessionPane {
     this.completionButton.type = 'button';
     this.completionButton.title = 'Complete a path (Tab)';
     this.completionButton.setAttribute('aria-label', 'Complete a file path');
-    this.completionButton.style.display = 'none';
-    this.completionButton.addEventListener('click', () => this.invokeCompletion());
+    this.completionButton.setAttribute('aria-expanded', 'false');
+    // A pointer click must leave keyboard ownership with the textarea so Escape
+    // can still dismiss the menu and typing can immediately refine it.
+    this.completionButton.addEventListener('mousedown', (event) => event.preventDefault());
+    this.completionButton.addEventListener('click', () => {
+      if (this.completionOpen) this.hideCompletions();
+      else this.invokeCompletion();
+      this.input.focus();
+    });
 
     this.completionMenu = el('div', 'completion-menu');
     this.completionMenu.setAttribute('role', 'listbox');
@@ -256,15 +258,14 @@ export class SessionPane {
     const bash = parseComposerInput(this.input.value)?.kind === 'bash';
     this.input.classList.toggle('bash', bash);
     this.sendButton.textContent = bash ? 'Run' : 'Send';
-    this.completionButton.style.display = bash ? '' : 'none';
     return bash;
   }
 
   /** Open or refresh the local completion list. Also serves as manual retry. */
   invokeCompletion() {
-    if (!isBashComposer(this.input.value)) return;
     this.fileTree.open(true);
     this.completionOpen = true;
+    this.completionButton.setAttribute('aria-expanded', 'true');
     this.completionIndex = 0;
     this.renderCompletions();
   }
@@ -335,6 +336,7 @@ export class SessionPane {
 
   hideCompletions() {
     this.completionOpen = false;
+    this.completionButton?.setAttribute('aria-expanded', 'false');
     this.completionResults = [];
     if (this.completionMenu) {
       this.completionMenu.replaceChildren();
@@ -381,7 +383,6 @@ export class SessionPane {
     }
 
     this.input.value = '';
-    this.wasBash = false;
     this.hideCompletions();
     this.autoGrow();
     this.paintMode();

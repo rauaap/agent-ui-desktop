@@ -23,7 +23,7 @@ export class FileTreeSocket {
     this.attempt = 0;
     this.closed = false;
     // Application errors are commonly deterministic. They wait for an explicit
-    // retry (leaving and re-entering Bash mode, or pressing Paths) rather than
+    // retry (pressing Tab or Paths) rather than
     // spinning against the server.
     this.applicationError = false;
   }

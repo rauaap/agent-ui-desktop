@@ -541,6 +541,29 @@ test('completion token: operators and whitespace bound the current token', () =>
     '!echo before | cat src/utils.js > out');
 });
 
+test('completion token: prompts complete the token at the cursor', () => {
+  const text = 'Please inspect src/utZZ before answering';
+  const cursor = text.indexOf('ZZ');
+  const token = completionToken(text, cursor);
+  assertEqual(token.query, 'src/ut');
+  assertEqual(text.slice(token.start, token.end), 'src/utZZ');
+  assertEqual(insertCompletion(text, token, 'src/utils.js'),
+    'Please inspect src/utils.js before answering');
+});
+
+test('completion token: an empty prompt can open the full path picker', () => {
+  const token = completionToken('', 0);
+  assertEqual(token.query, '');
+  assertEqual(token.start, 0);
+  assertEqual(token.end, 0);
+});
+
+test('completion insertion: prompt paths remain readable rather than shell-quoted', () => {
+  const text = 'Review my';
+  assertEqual(insertCompletion(text, completionToken(text), 'my files/read me.md'),
+    'Review my files/read me.md');
+});
+
 test('completion token: incomplete quotes and escapes decode safely', () => {
   let text = "!cat 'my fi";
   let token = completionToken(text, text.length);

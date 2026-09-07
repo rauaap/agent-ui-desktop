@@ -196,14 +196,15 @@ split the agent message below it. The card is bordered red and its output sits
 in a plain code block: the agent never saw any of this, and the block is there to
 be copied into a prompt if you decide it should.
 
-Entering Bash mode lazily opens the session's separate `/files` WebSocket and
-keeps its revisioned path snapshot for the life of the selected pane. Tab opens
-component-boundary, case-insensitive completion at the cursor; further presses
-move through the results (Shift+Tab moves back). The **Paths** button provides
-the same opening gesture on touch keyboards. Matching and ranking are
-entirely local. Selecting a result replaces the complete shell token with one
-safely quoted relative path (and preserves a directory's trailing slash), so no
-completion query or `@` syntax is sent to the server.
+Tab or the **Paths** button lazily opens the session's separate `/files`
+WebSocket and keeps its revisioned path snapshot for the life of the selected
+pane. This works in prompts as well as Bash mode. Completion is
+component-boundary and case-insensitive at the cursor; further Tab presses move
+through the results (Shift+Tab moves back). Matching and ranking are entirely
+local. Selecting a result replaces the complete token with a relative path. In
+Bash mode it is safely shell-quoted; in a prompt it remains readable text. A
+directory's trailing slash is preserved, and no completion query or `@` syntax
+is sent to the server.
 
 ### Project settings report; they do not edit
 
@@ -420,8 +421,8 @@ or open `test/index.html` in a browser, which needs nothing installed at all.
   unscoped session list on a 404; this one requires a current server.
 - **Search and export** are new here.
 - **No global keyboard shortcut layer.** The composer sends on Enter
-  (Shift+Enter for a newline), and Bash mode uses Tab and arrow keys for its
-  local path-completion menu.
+  (Shift+Enter for a newline), and Tab and arrow keys operate its local
+  path-completion menu in both prompt and Bash modes.
 - **Bash mode** is here only, for now.
 
 ## Notes

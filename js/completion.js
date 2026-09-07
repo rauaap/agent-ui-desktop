@@ -1,4 +1,4 @@
-/** Pure Bash path-completion matching, token parsing, and safe insertion. */
+/** Pure composer path-completion matching, token parsing, and safe insertion. */
 
 export const COMPLETION_LIMIT = 50;
 const OPERATORS = new Set(['|', '&', ';', '(', ')', '<', '>']);
@@ -11,24 +11,26 @@ export function isBashComposer(text) {
 }
 
 /**
- * Find and decode the shell token at the cursor.
+ * Find and decode the token at the cursor in either a prompt or Bash input.
  *
  * This is deliberately an incomplete-input parser rather than a command
- * parser: it recognizes boundaries, quotes and escapes, but never evaluates
- * substitutions or executes anything. `start`/`end` cover the complete raw
- * token, while `query` contains only its decoded prefix through the cursor.
+ * parser: it recognizes shell boundaries, quotes and escapes, but never
+ * evaluates substitutions or executes anything. In Bash mode the leading `!`
+ * is excluded. `start`/`end` cover the complete raw token, while `query`
+ * contains only its decoded prefix through the cursor.
  */
 export function completionToken(text, cursor = String(text ?? '').length) {
   text = String(text ?? '');
   cursor = Math.max(0, Math.min(text.length, Number.isInteger(cursor) ? cursor : text.length));
   const first = text.search(/\S/);
-  if (first < 0 || text[first] !== '!' || cursor <= first) return null;
-  const commandStart = first + 1;
+  const bash = first >= 0 && text[first] === '!';
+  if (bash && cursor <= first) return null;
+  const contentStart = bash ? first + 1 : 0;
 
-  let start = commandStart;
+  let start = contentStart;
   let quote = null;
   let escaped = false;
-  for (let i = commandStart; i < cursor; i += 1) {
+  for (let i = contentStart; i < cursor; i += 1) {
     const character = text[i];
     if (escaped) {
       escaped = false;
@@ -169,8 +171,11 @@ export function shellEscape(path) {
   return `'${path.replaceAll("'", "'\\''")}'`;
 }
 
-/** Return composer text with the complete current token safely replaced. */
+/**
+ * Return composer text with the complete current token replaced. Shell inputs
+ * receive a safely quoted argument; prompts receive the path as readable text.
+ */
 export function insertCompletion(text, token, path) {
-  const escaped = shellEscape(path);
-  return `${text.slice(0, token.start)}${escaped}${text.slice(token.end)}`;
+  const insertion = isBashComposer(text) ? shellEscape(path) : String(path ?? '');
+  return `${text.slice(0, token.start)}${insertion}${text.slice(token.end)}`;
 }
