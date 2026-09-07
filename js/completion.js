@@ -135,7 +135,12 @@ export function componentMatchIndex(pathLower, queryLower) {
  * The limit constrains rendering, never the synchronized cache.
  */
 export function matchPaths(searchPaths, query, limit = COMPLETION_LIMIT) {
-  const lowerQuery = String(query ?? '').toLowerCase();
+  // The synchronized tree is normalized relative to the working directory,
+  // but `./` is a conventional (and for shell commands sometimes essential)
+  // spelling of that same root. Ignore it for matching; insertion restores it.
+  const rawQuery = String(query ?? '');
+  const relative = rawQuery.startsWith('./');
+  const lowerQuery = (relative ? rawQuery.slice(2) : rawQuery).toLowerCase();
   const queryForExact = lowerQuery.endsWith('/') ? lowerQuery.slice(0, -1) : lowerQuery;
   const ranked = [];
 
@@ -176,6 +181,14 @@ export function shellEscape(path) {
  * receive a safely quoted argument; prompts receive the path as readable text.
  */
 export function insertCompletion(text, token, path) {
-  const insertion = isBashComposer(text) ? shellEscape(path) : String(path ?? '');
+  path = String(path ?? '');
+  if (token.query.startsWith('./') && !path.startsWith('./')) path = `./${path}`;
+  const bash = isBashComposer(text);
+  let insertion = bash ? shellEscape(path) : path;
+  // A leading `!` changes the entire composer to Bash mode. Preserve the
+  // client's existing prompt escape when such a path becomes its first token.
+  if (!bash && path.startsWith('!') && !text.slice(0, token.start).trim()) {
+    insertion = `\\${path}`;
+  }
   return `${text.slice(0, token.start)}${insertion}${text.slice(token.end)}`;
 }

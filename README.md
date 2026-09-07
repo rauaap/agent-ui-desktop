@@ -203,8 +203,10 @@ component-boundary and case-insensitive at the cursor; further Tab presses move
 through the results (Shift+Tab moves back). Matching and ranking are entirely
 local. Selecting a result replaces the complete token with a relative path. In
 Bash mode it is safely shell-quoted; in a prompt it remains readable text. A
-directory's trailing slash is preserved, and no completion query or `@` syntax
-is sent to the server.
+first-token path beginning with `!` keeps the prompt's `\!` literal escape so
+completion cannot silently select Bash mode. A typed `./` prefix is also
+preserved even though synchronized paths are normalized. A directory's trailing
+slash is preserved, and no completion query or `@` syntax is sent to the server.
 
 ### Project settings report; they do not edit
 

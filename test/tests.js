@@ -531,6 +531,12 @@ test('completion: exact and full-path matches rank first', () => {
   assertEqual(matchPaths(searchRows(paths), '', 2).length, 2, 'display limit');
 });
 
+test('completion: a leading ./ matches the normalized relative tree', () => {
+  const paths = ['script', 'src/main.js', 'tools/script'];
+  assertEqual(matchPaths(searchRows(paths), './scr').join(), 'script,tools/script');
+  assertEqual(matchPaths(searchRows(paths), './src/').join(), 'src/main.js');
+});
+
 test('completion token: operators and whitespace bound the current token', () => {
   const text = '!echo before | cat src/utZZ > out';
   const cursor = text.indexOf('ZZ');
@@ -562,6 +568,31 @@ test('completion insertion: prompt paths remain readable rather than shell-quote
   const text = 'Review my';
   assertEqual(insertCompletion(text, completionToken(text), 'my files/read me.md'),
     'Review my files/read me.md');
+});
+
+test('completion insertion: a typed ./ prefix is preserved', () => {
+  let text = '!./scr';
+  assertEqual(insertCompletion(text, completionToken(text), 'script'), '!./script');
+
+  text = '!cat ./hello';
+  assertEqual(insertCompletion(text, completionToken(text), 'hello world'),
+    "!cat './hello world'", 'the restored prefix is included in shell quoting');
+
+  text = 'Review ./src/ma';
+  assertEqual(insertCompletion(text, completionToken(text), 'src/main.js'),
+    'Review ./src/main.js');
+});
+
+test('completion insertion: a first-token ! path remains a literal prompt', () => {
+  let text = "'!hello";
+  let completed = insertCompletion(text, completionToken(text), '!hello world');
+  assertEqual(completed, '\\!hello world');
+  assertEqual(parseComposerInput(completed).kind, 'input');
+  assertEqual(parseComposerInput(completed).text, '!hello world');
+
+  text = 'Review !hello';
+  completed = insertCompletion(text, completionToken(text), '!hello world');
+  assertEqual(completed, 'Review !hello world', 'a later ! cannot select Bash mode');
 });
 
 test('completion token: incomplete quotes and escapes decode safely', () => {
