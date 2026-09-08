@@ -108,8 +108,8 @@ const sidebar = new Sidebar(document.getElementById('tree'), store, {
   onUnarchiveProject: (project) => setProjectArchived(project, false),
   onUnarchiveSession: (session) => setSessionArchived(session.id, false),
   onPermissions: setSessionPermissions,
-  onArchiveSession: (session, archived) => setSessionArchived(session.id, archived),
-  onDeleteSession: deleteSession,
+  onArchiveSessions: setSessionsArchived,
+  onDeleteSessions: deleteSessions,
 });
 
 notifier.onActivate = (id) => {
@@ -410,6 +410,27 @@ async function setSessionPermissions(session, write, command) {
   }
 }
 
+/** Archive a selected range with one refresh, even when one row is refused. */
+async function setSessionsArchived(sessions, archived) {
+  const results = await Promise.allSettled(
+    sessions.map((session) => api.setSessionArchived(session.id, archived)),
+  );
+  await refresh();
+
+  const failures = results.filter((result) => result.status === 'rejected');
+  const changed = results.length - failures.length;
+  if (changed) {
+    toast(`${changed} session${changed === 1 ? '' : 's'} ${archived ? 'archived' : 'unarchived'}`);
+  }
+  if (failures.length) {
+    const error = failures[0].reason;
+    if (!archived && failures.length === 1) reportUnarchiveFailure(error);
+    else fail(failures.length === 1
+      ? error
+      : new Error(`${failures.length} sessions could not be ${archived ? 'archived' : 'unarchived'}`));
+  }
+}
+
 /** A missing cwd is unrecoverable at the harness layer, so keep it archived. */
 function reportUnarchiveFailure(error) {
   if (error?.status === 409 && /director(?:y|ies).*missing|missing.*director/i.test(error.message)) {
@@ -677,7 +698,7 @@ async function openSessionSettings(id) {
   }
 
   if (result.deleted) {
-    await deleteSession(state);
+    await deleteSessions([state]);
     return;
   }
 
@@ -711,32 +732,51 @@ async function openSessionSettings(id) {
   await refresh();
 }
 
-/** Delete from either Session settings or a sidebar row, with the same warning. */
-async function deleteSession(session) {
-  const id = session.id;
-  const name = session.name || String(id);
-  const worktreeId = session.worktreeId ?? session.worktree_id ?? null;
-  const workingDir = session.workingDir ?? session.working_dir;
-  const lastOnWorktree = worktreeId !== null && sessionsOnWorktree(worktreeId) <= 1;
+/** Delete one session or a selected range after a single confirmation. */
+async function deleteSessions(sessions) {
+  if (!sessions.length) return;
+  const single = sessions.length === 1 ? sessions[0] : null;
+  const project = !single && projectFor(sessions[0]);
+  const projectName = project && (project.name || project.path);
+  const id = single?.id;
+  const name = single && (single.name || String(id));
+  const worktreeId = single && (single.worktreeId ?? single.worktree_id ?? null);
+  const workingDir = single && (single.workingDir ?? single.working_dir);
+  const lastOnWorktree = single && worktreeId !== null
+    && sessionsOnWorktree(worktreeId) <= 1;
   const confirmed = await confirmDialog(
-    `Delete “${name}”?`,
-    worktreeId !== null
-      ? 'The session and its whole transcript are removed. Its worktree at '
-        + `${workingDir} stays exactly where it is, along with everything in it.`
-      : 'The session and its whole transcript are removed. Files the agent wrote stay on disk.',
+    single
+      ? `Delete “${name}”?`
+      : `Delete ${sessions.length} sessions from “${projectName || 'this project'}”?`,
+    single
+      ? (worktreeId !== null
+        ? 'The session and its whole transcript are removed. Its worktree at '
+          + `${workingDir} stays exactly where it is, along with everything in it.`
+        : 'The session and its whole transcript are removed. Files the agent wrote stay on disk.')
+      : `The ${sessions.length} sessions and their whole transcripts are removed. `
+        + 'Files and worktrees they used stay on disk.',
   );
   if (!confirmed) return;
 
-  try {
-    await api.deleteSession(id);
-    workspace.closeSession(id);
-    store.forget(id);
-    await refresh();
-    if (lastOnWorktree) {
-      toast(`The worktree ${workingDir} is still there — see project settings`);
-    }
-  } catch (error) {
-    fail(error);
+  const results = await Promise.allSettled(sessions.map((session) => api.deleteSession(session.id)));
+  results.forEach((result, index) => {
+    if (result.status !== 'fulfilled') return;
+    const deletedId = sessions[index].id;
+    workspace.closeSession(deletedId);
+    store.forget(deletedId);
+  });
+  await refresh();
+
+  const failures = results.filter((result) => result.status === 'rejected');
+  const deleted = results.length - failures.length;
+  if (failures.length) {
+    fail(failures.length === 1
+      ? failures[0].reason
+      : new Error(`${failures.length} sessions could not be deleted`));
+  }
+  if (deleted > 1) toast(`${deleted} sessions deleted`);
+  if (deleted === 1 && lastOnWorktree) {
+    toast(`The worktree ${workingDir} is still there — see project settings`);
   }
 }
 

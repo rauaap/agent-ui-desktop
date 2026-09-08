@@ -70,6 +70,9 @@ export class Sidebar {
     /** @type {object[]} agents from `GET /agents`, for the tooltip's label. */
     this.agents = [];
     this.activeId = null;
+    this.selectedIds = new Set();
+    this.selectionAnchor = null;
+    this.selectionScope = null;
     this.expanded = new Set(loadExpanded());
     this.menu = null;
     this.menuTarget = null;
@@ -105,9 +108,22 @@ export class Sidebar {
 
   setActive(id) {
     this.activeId = id;
-    for (const node of this.root.querySelectorAll('.session')) {
-      node.classList.toggle('active', node.dataset.id === String(id));
+    const key = id === null || id === undefined ? null : String(id);
+    // Activations from outside the tree (for example, a notification) become
+    // the new selection. Activating the end of a shift-selected range must not
+    // collapse that range again.
+    if (key && !this.selectedIds.has(key)) {
+      const session = this.sessions.find((row) => String(row.id) === key);
+      if (session) {
+        const project = this.projects.find((row) => belongsTo(session, row));
+        this.selectedIds = new Set([key]);
+        this.selectionAnchor = key;
+        this.selectionScope = project
+          ? `${isArchived(session) ? 'archived' : 'live'}:${project.id || project.path}`
+          : null;
+      }
     }
+    this.paintSelection();
   }
 
   /**
@@ -257,9 +273,14 @@ export class Sidebar {
   }
 
   sessionRow(session, project, inArchive) {
-    const active = String(session.id) === String(this.activeId);
-    const item = el('button', `session${active ? ' active' : ''}${inArchive ? ' archived' : ''}`);
-    item.dataset.id = String(session.id);
+    const id = String(session.id);
+    const active = id === String(this.activeId);
+    const selected = this.selectedIds.has(id);
+    const scope = `${inArchive ? 'archived' : 'live'}:${project.id || project.path}`;
+    const item = el('button', `session${active ? ' active' : ''}${selected ? ' selected' : ''}`
+      + `${inArchive ? ' archived' : ''}`);
+    item.dataset.id = id;
+    item.dataset.scope = scope;
     item.appendChild(el('span', `dot ${this.statusOf(session)}`));
     item.appendChild(el('span', 'sname', session.name || String(session.id)));
     // A worktree session runs somewhere other than the project directory,
@@ -287,21 +308,62 @@ export class Sidebar {
     const agent = agentName(this.agents, session.agent);
     item.title = `${session.name}\n${agent}` + (where ? `\n${where}` : '')
       + (inArchive ? `\nArchived ${filedLabel(session.archived_at)}` : '');
-    item.addEventListener('click', () => this.handlers.onOpenSession(session));
+    item.addEventListener('click', (event) => {
+      this.selectSession(session, scope, event.shiftKey);
+      this.handlers.onOpenSession(session);
+    });
     item.addEventListener('contextmenu', (event) => {
       event.preventDefault();
-      this.openSessionMenu(session, event.clientX, event.clientY, item);
+      if (!this.selectedIds.has(id)) this.selectSession(session, scope, false);
+      const selected = this.sessions.filter((row) => this.selectedIds.has(String(row.id)));
+      this.openSessionMenu(selected, event.clientX, event.clientY, item);
     });
     return item;
   }
 
-  /** A native-sized action menu for one session. */
-  openSessionMenu(session, x, y, anchor) {
+  /** Select one row, or the contiguous range from the anchor in this project. */
+  selectSession(session, scope, extend) {
+    const id = String(session.id);
+    if (extend && this.selectionAnchor && this.selectionScope === scope) {
+      const rows = [...this.root.querySelectorAll('.session')]
+        .filter((node) => node.dataset.scope === scope);
+      const from = rows.findIndex((node) => node.dataset.id === this.selectionAnchor);
+      const to = rows.findIndex((node) => node.dataset.id === id);
+      if (from >= 0 && to >= 0) {
+        const [start, end] = from < to ? [from, to] : [to, from];
+        this.selectedIds = new Set(rows.slice(start, end + 1).map((node) => node.dataset.id));
+        this.paintSelection();
+        return;
+      }
+    }
+
+    this.selectedIds = new Set([id]);
+    this.selectionAnchor = id;
+    this.selectionScope = scope;
+    this.paintSelection();
+  }
+
+  paintSelection() {
+    const active = String(this.activeId);
+    for (const node of this.root.querySelectorAll('.session')) {
+      node.classList.toggle('active', node.dataset.id === active);
+      node.classList.toggle('selected', this.selectedIds.has(node.dataset.id));
+    }
+  }
+
+  /** A native-sized action menu for one session or a selected range. */
+  openSessionMenu(sessions, x, y, anchor) {
     this.closeMenu();
+    if (!sessions.length) return;
 
     const menu = el('div', 'session-menu');
     menu.setAttribute('role', 'menu');
-    menu.setAttribute('aria-label', `Actions for ${session.name || session.id}`);
+    menu.setAttribute('aria-label', sessions.length === 1
+      ? `Actions for ${sessions[0].name || sessions[0].id}`
+      : `Actions for ${sessions.length} sessions`);
+    if (sessions.length > 1) {
+      menu.appendChild(el('div', 'session-menu-label', `${sessions.length} sessions selected`));
+    }
 
     const action = (label, onClick, danger = false) => {
       const button = el('button', `session-menu-item${danger ? ' danger' : ''}`);
@@ -316,43 +378,47 @@ export class Sidebar {
       return button;
     };
 
-    let write = !!session.auto_approve_write;
-    let command = !!session.auto_approve_command;
-    menu.appendChild(el('div', 'session-menu-label', 'Permissions'));
+    if (sessions.length === 1) {
+      const session = sessions[0];
+      let write = !!session.auto_approve_write;
+      let command = !!session.auto_approve_command;
+      menu.appendChild(el('div', 'session-menu-label', 'Permissions'));
 
-    // These deliberately stay open: turning both permissions on is a common
-    // two-click operation. Keep the local pair current so the second PATCH
-    // includes the value chosen by the first click.
-    const permission = (label, getChecked, setChecked) => {
-      const button = el('button', 'session-menu-item');
-      button.type = 'button';
-      button.setAttribute('role', 'menuitemcheckbox');
-      const mark = el('span', 'session-menu-mark session-menu-check');
-      button.append(mark, el('span', '', label));
-      const paint = () => {
-        const checked = getChecked();
-        button.setAttribute('aria-checked', String(checked));
-        mark.textContent = checked ? '✓' : '';
-      };
-      paint();
-      button.addEventListener('click', () => {
-        setChecked(!getChecked());
+      // These deliberately stay open: turning both permissions on is a common
+      // two-click operation. Keep the local pair current so the second PATCH
+      // includes the value chosen by the first click.
+      const permission = (label, getChecked, setChecked) => {
+        const button = el('button', 'session-menu-item');
+        button.type = 'button';
+        button.setAttribute('role', 'menuitemcheckbox');
+        const mark = el('span', 'session-menu-mark session-menu-check');
+        button.append(mark, el('span', '', label));
+        const paint = () => {
+          const checked = getChecked();
+          button.setAttribute('aria-checked', String(checked));
+          mark.textContent = checked ? '✓' : '';
+        };
         paint();
-        session.auto_approve_write = write;
-        session.auto_approve_command = command;
-        this.handlers.onPermissions(session, write, command);
-      });
-      menu.appendChild(button);
-    };
-    permission('Auto-approve writes', () => write, (value) => { write = value; });
-    permission('Auto-approve commands', () => command, (value) => { command = value; });
-    menu.appendChild(el('div', 'session-menu-separator'));
+        button.addEventListener('click', () => {
+          setChecked(!getChecked());
+          paint();
+          session.auto_approve_write = write;
+          session.auto_approve_command = command;
+          this.handlers.onPermissions(session, write, command);
+        });
+        menu.appendChild(button);
+      };
+      permission('Auto-approve writes', () => write, (value) => { write = value; });
+      permission('Auto-approve commands', () => command, (value) => { command = value; });
+      menu.appendChild(el('div', 'session-menu-separator'));
+    }
 
-    const archived = isArchived(session);
+    const archived = sessions.every(isArchived);
     action(archived ? 'Unarchive' : 'Archive', () => {
-      this.handlers.onArchiveSession(session, !archived);
+      this.handlers.onArchiveSessions(sessions, !archived);
     });
-    action('Delete…', () => this.handlers.onDeleteSession(session), true);
+    action(`Delete${sessions.length > 1 ? ` ${sessions.length} sessions` : ''}…`,
+      () => this.handlers.onDeleteSessions(sessions), true);
 
     document.body.appendChild(menu);
     this.menu = menu;

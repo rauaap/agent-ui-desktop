@@ -265,6 +265,12 @@ body.sidebar-resizing * { cursor: col-resize !important; user-select: none !impo
  * may select another row for an action, but must not visually transfer active
  * status away from the pane the user is still looking at. */
 .session.active { background: var(--accent-soft); color: var(--ink); }
+.session.selected:not(.active) {
+  background: var(--panel-hover);
+  color: var(--ink);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
 /* Preserve the grey context target after the pointer moves into its menu.
  * Active sessions remain orange, since active status takes precedence. */
 .session.context-target:not(.active) {
@@ -447,7 +453,8 @@ body.sidebar-resizing * { cursor: col-resize !important; user-select: none !impo
 
 /* An archived selected session is still active, and the highlight has to beat
  * the dimming above. */
-.session.archived.active { color: var(--ink); }
+.session.archived.active,
+.session.archived.selected { color: var(--ink); }
 
 /* ------------------------------------------------------------------ */
 /* main                                                               */
