@@ -261,7 +261,93 @@ body.sidebar-resizing * { cursor: col-resize !important; user-select: none !impo
 }
 
 .session:hover { background: var(--panel-hover); color: var(--ink); }
+/* Orange always identifies the session open in the workspace. A context click
+ * may select another row for an action, but must not visually transfer active
+ * status away from the pane the user is still looking at. */
 .session.active { background: var(--accent-soft); color: var(--ink); }
+/* Preserve the grey context target after the pointer moves into its menu.
+ * Active sessions remain orange, since active status takes precedence. */
+.session.context-target:not(.active) {
+  background: var(--panel-hover);
+  color: var(--ink);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+/* Right-click actions are portalled to <body> so the sidebar's scroll viewport
+ * cannot clip them. The fixed positioning is filled in by Sidebar after the
+ * menu has been measured and keeps it inside the window at either edge. */
+.session-menu {
+  position: fixed;
+  z-index: 60;
+  width: max-content;
+  min-width: 210px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-2);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.48);
+}
+
+.session-menu-label {
+  padding: 3px 10px 5px 30px;
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.session-menu-item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 6px 10px 6px 4px;
+  border-radius: 7px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.session-menu-item:hover,
+.session-menu-item:focus-visible {
+  outline: none;
+  background: var(--panel-hover);
+}
+
+.session-menu-item.danger { color: var(--danger); }
+.session-menu-item.danger:hover,
+.session-menu-item.danger:focus-visible { background: var(--danger-soft); }
+
+.session-menu-mark {
+  width: 26px;
+  flex: none;
+  color: var(--accent-strong);
+  text-align: center;
+}
+
+/* Keep the unchecked state visible instead of leaving an ambiguous blank at
+ * the start of a permission row. */
+.session-menu-check {
+  display: grid;
+  place-items: center;
+  width: 15px;
+  height: 15px;
+  margin: 0 6px;
+  border: 1px solid var(--faint);
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.session-menu-item[aria-checked="true"] .session-menu-check {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.session-menu-separator {
+  height: 1px;
+  margin: 5px 4px;
+  background: var(--line);
+}
 
 .session .sname {
   flex: 1;

@@ -71,6 +71,20 @@ export class Sidebar {
     this.agents = [];
     this.activeId = null;
     this.expanded = new Set(loadExpanded());
+    this.menu = null;
+    this.menuTarget = null;
+
+    // Context menus live outside the scrolling tree, so close one whenever the
+    // next gesture lands elsewhere or the viewport moves underneath it.
+    document.addEventListener('pointerdown', (event) => {
+      if (this.menu && !this.menu.contains(event.target)) this.closeMenu();
+    });
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') this.closeMenu();
+    });
+    window.addEventListener('blur', () => this.closeMenu());
+    window.addEventListener('resize', () => this.closeMenu());
+    this.root.addEventListener('scroll', () => this.closeMenu());
   }
 
   setData(projects, sessions, worktrees = [], agents = []) {
@@ -133,6 +147,7 @@ export class Sidebar {
   }
 
   render() {
+    this.closeMenu();
     this.root.replaceChildren();
 
     if (!this.projects.length) {
@@ -273,7 +288,93 @@ export class Sidebar {
     item.title = `${session.name}\n${agent}` + (where ? `\n${where}` : '')
       + (inArchive ? `\nArchived ${filedLabel(session.archived_at)}` : '');
     item.addEventListener('click', () => this.handlers.onOpenSession(session));
+    item.addEventListener('contextmenu', (event) => {
+      event.preventDefault();
+      this.openSessionMenu(session, event.clientX, event.clientY, item);
+    });
     return item;
+  }
+
+  /** A native-sized action menu for one session. */
+  openSessionMenu(session, x, y, anchor) {
+    this.closeMenu();
+
+    const menu = el('div', 'session-menu');
+    menu.setAttribute('role', 'menu');
+    menu.setAttribute('aria-label', `Actions for ${session.name || session.id}`);
+
+    const action = (label, onClick, danger = false) => {
+      const button = el('button', `session-menu-item${danger ? ' danger' : ''}`);
+      button.type = 'button';
+      button.setAttribute('role', 'menuitem');
+      button.append(el('span', 'session-menu-mark'), el('span', '', label));
+      button.addEventListener('click', () => {
+        this.closeMenu();
+        onClick();
+      });
+      menu.appendChild(button);
+      return button;
+    };
+
+    let write = !!session.auto_approve_write;
+    let command = !!session.auto_approve_command;
+    menu.appendChild(el('div', 'session-menu-label', 'Permissions'));
+
+    // These deliberately stay open: turning both permissions on is a common
+    // two-click operation. Keep the local pair current so the second PATCH
+    // includes the value chosen by the first click.
+    const permission = (label, getChecked, setChecked) => {
+      const button = el('button', 'session-menu-item');
+      button.type = 'button';
+      button.setAttribute('role', 'menuitemcheckbox');
+      const mark = el('span', 'session-menu-mark session-menu-check');
+      button.append(mark, el('span', '', label));
+      const paint = () => {
+        const checked = getChecked();
+        button.setAttribute('aria-checked', String(checked));
+        mark.textContent = checked ? '✓' : '';
+      };
+      paint();
+      button.addEventListener('click', () => {
+        setChecked(!getChecked());
+        paint();
+        session.auto_approve_write = write;
+        session.auto_approve_command = command;
+        this.handlers.onPermissions(session, write, command);
+      });
+      menu.appendChild(button);
+    };
+    permission('Auto-approve writes', () => write, (value) => { write = value; });
+    permission('Auto-approve commands', () => command, (value) => { command = value; });
+    menu.appendChild(el('div', 'session-menu-separator'));
+
+    const archived = isArchived(session);
+    action(archived ? 'Unarchive' : 'Archive', () => {
+      this.handlers.onArchiveSession(session, !archived);
+    });
+    action('Delete…', () => this.handlers.onDeleteSession(session), true);
+
+    document.body.appendChild(menu);
+    this.menu = menu;
+    this.menuTarget = anchor;
+    anchor.classList.add('context-target');
+
+    // Keyboard-opened context menus report (0, 0); put those beside the row.
+    const rect = anchor.getBoundingClientRect();
+    const requestedX = x || rect.left + 16;
+    const requestedY = y || rect.bottom;
+    const gap = 8;
+    const bounds = menu.getBoundingClientRect();
+    menu.style.left = `${Math.max(gap, Math.min(requestedX, window.innerWidth - bounds.width - gap))}px`;
+    menu.style.top = `${Math.max(gap, Math.min(requestedY, window.innerHeight - bounds.height - gap))}px`;
+    menu.querySelector('.session-menu-item')?.focus();
+  }
+
+  closeMenu() {
+    this.menu?.remove();
+    this.menuTarget?.classList.remove('context-target');
+    this.menu = null;
+    this.menuTarget = null;
   }
 
   renderArchive(groups) {

@@ -36,6 +36,8 @@ const notifier = new Notifier(store);
 let projects = [];
 let sessionsById = new Map();
 let worktrees = [];
+/** Serialize rapid permission toggles per session so their PATCHes cannot land out of order. */
+const permissionUpdates = new Map();
 /** The agents `GET /agents` last offered — see `js/agents.js`. */
 let agents = [];
 
@@ -105,6 +107,9 @@ const sidebar = new Sidebar(document.getElementById('tree'), store, {
   onProjectSettings: openProjectSettings,
   onUnarchiveProject: (project) => setProjectArchived(project, false),
   onUnarchiveSession: (session) => setSessionArchived(session.id, false),
+  onPermissions: setSessionPermissions,
+  onArchiveSession: (session, archived) => setSessionArchived(session.id, archived),
+  onDeleteSession: deleteSession,
 });
 
 notifier.onActivate = (id) => {
@@ -370,6 +375,38 @@ async function setSessionArchived(id, archived) {
   } catch (error) {
     if (!archived) reportUnarchiveFailure(error);
     else fail(error);
+  }
+}
+
+/**
+ * Change permissions without closing the context menu. Updates for one session
+ * are queued because users commonly enable both toggles in quick succession;
+ * otherwise the older response could arrive last and undo the second click.
+ */
+async function setSessionPermissions(session, write, command) {
+  const id = String(session.id);
+  const previous = permissionUpdates.get(id) || Promise.resolve();
+  const update = previous.catch(() => {}).then(async () => {
+    await api.setAutoApprove(id, write, command);
+    const current = sessionsById.get(id);
+    if (current) {
+      current.auto_approve_write = write;
+      current.auto_approve_command = command;
+    }
+    session.auto_approve_write = write;
+    session.auto_approve_command = command;
+    if (store.has(id)) store.setMeta(id, {
+      autoApproveWrite: write,
+      autoApproveCommand: command,
+    });
+  });
+  permissionUpdates.set(id, update);
+  try {
+    await update;
+  } catch (error) {
+    fail(error);
+  } finally {
+    if (permissionUpdates.get(id) === update) permissionUpdates.delete(id);
   }
 }
 
@@ -640,32 +677,7 @@ async function openSessionSettings(id) {
   }
 
   if (result.deleted) {
-    // Deleting a session touches nothing on disk any more: the worktree is its
-    // own resource and outlives whatever sessions used it.
-    const worktreePath = state.worktreeId ? state.workingDir : null;
-    const lastOnWorktree = !!state.worktreeId && sessionsOnWorktree(state.worktreeId) <= 1;
-    const confirmed = await confirmDialog(
-      `Delete “${state.name}”?`,
-      state.worktreeId
-        ? 'The session and its whole transcript are removed. Its worktree at '
-          + `${state.workingDir} stays exactly where it is, along with everything in it.`
-        : 'The session and its whole transcript are removed. Files the agent wrote stay on disk.',
-    );
-    if (!confirmed) return;
-    try {
-      await api.deleteSession(id);
-      workspace.closeSession(id);
-      store.forget(id);
-      await refresh();
-      // Finishing a session does not mean finishing with the branch, so this is
-      // a note that the worktree is still there rather than a nudge to remove
-      // it — project settings is where it can be, when the user wants to.
-      if (lastOnWorktree) {
-        toast(`The worktree ${worktreePath} is still there — see project settings`);
-      }
-    } catch (error) {
-      fail(error);
-    }
+    await deleteSession(state);
     return;
   }
 
@@ -697,6 +709,35 @@ async function openSessionSettings(id) {
   // socket. In the `finally` position because a rejected archive still leaves
   // whatever was applied before it to be shown.
   await refresh();
+}
+
+/** Delete from either Session settings or a sidebar row, with the same warning. */
+async function deleteSession(session) {
+  const id = session.id;
+  const name = session.name || String(id);
+  const worktreeId = session.worktreeId ?? session.worktree_id ?? null;
+  const workingDir = session.workingDir ?? session.working_dir;
+  const lastOnWorktree = worktreeId !== null && sessionsOnWorktree(worktreeId) <= 1;
+  const confirmed = await confirmDialog(
+    `Delete “${name}”?`,
+    worktreeId !== null
+      ? 'The session and its whole transcript are removed. Its worktree at '
+        + `${workingDir} stays exactly where it is, along with everything in it.`
+      : 'The session and its whole transcript are removed. Files the agent wrote stay on disk.',
+  );
+  if (!confirmed) return;
+
+  try {
+    await api.deleteSession(id);
+    workspace.closeSession(id);
+    store.forget(id);
+    await refresh();
+    if (lastOnWorktree) {
+      toast(`The worktree ${workingDir} is still there — see project settings`);
+    }
+  } catch (error) {
+    fail(error);
+  }
 }
 
 /* ------------------------------------------------------------------ */
