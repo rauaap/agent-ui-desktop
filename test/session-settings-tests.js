@@ -1,4 +1,4 @@
-import { SettingsSync, canChangeSandbox, settingsMeta } from '../js/session-settings.js';
+import { SettingsSync, canChangeSandbox, settingsMeta, supportsSandbox } from '../js/session-settings.js';
 import { Store } from '../js/store.js';
 
 export const results = [];
@@ -29,17 +29,27 @@ function deferred() {
 await test('sandbox: missing means unknown; false and unsupported-agent values survive', () => {
   equal(settingsMeta({}).sandbox, null);
   equal(settingsMeta({ sandbox: false }).sandbox, false);
-  equal(settingsMeta({ agent: 'claude-code', sandbox: true }).sandbox, true);
+  equal(settingsMeta({ agent: 'other', sandbox: true }).sandbox, true);
 });
 
-await test('sandbox: only confirmed, idle, connected Pi sessions are editable', () => {
-  equal(canChangeSandbox(ready()), true);
-  for (const override of [
-    { agent: 'claude-code' }, { agent: 'other' }, { sandbox: null },
-    { status: 'running' }, { status: 'awaiting_approval' }, { connected: false },
-    { settingsLoaded: false }, { sessionReady: false }, { sandboxSaving: true },
-  ]) equal(canChangeSandbox({ ...ready(), ...override }), false);
-  equal(canChangeSandbox({ ...ready(), archivedAt: '2026-01-01', sandbox: false }), true);
+await test('sandbox: Pi and Claude Code support sandbox; unknown agents do not', () => {
+  equal(supportsSandbox('pi'), true);
+  equal(supportsSandbox('claude-code'), true);
+  equal(supportsSandbox('other'), false);
+  equal(supportsSandbox(undefined), false);
+});
+
+await test('sandbox: both supported agents require confirmed, idle, connected state', () => {
+  for (const agent of ['pi', 'claude-code']) {
+    const state = { ...ready(), agent };
+    equal(canChangeSandbox(state), true);
+    for (const override of [
+      { agent: 'other' }, { sandbox: null },
+      { status: 'running' }, { status: 'awaiting_approval' }, { connected: false },
+      { settingsLoaded: false }, { sessionReady: false }, { sandboxSaving: true },
+    ]) equal(canChangeSandbox({ ...state, ...override }), false);
+    equal(canChangeSandbox({ ...state, archivedAt: '2026-01-01', sandbox: false }), true);
+  }
 });
 
 await test('settings: newer live frames win over in-flight REST, scoped to their session', () => {
@@ -199,6 +209,7 @@ await test('sandbox API: creation preserves false and numeric worktree ids; PATC
     await api.setAutoApprove('7', true, false);
     await api.setAutoApprove('7', undefined, true);
     await api.createSession('name', '/app', 'pi', null, true);
+    await api.createSession('name', '/app', 'claude-code', '3', false);
     equal(calls[0].body, { name: 'name', project_path: '/app', agent: 'pi', worktree_id: 3, sandbox: false });
     equal('sandbox' in calls[1].body, false);
     equal(calls[2], { path: '/sessions/7', method: 'PATCH', body: { sandbox: false } });
@@ -206,6 +217,9 @@ await test('sandbox API: creation preserves false and numeric worktree ids; PATC
     equal(calls[4].body, { auto_approve_write: true, auto_approve_command: false });
     equal(calls[5].body, { auto_approve_command: true });
     equal(calls[6].body.sandbox, true);
+    equal(calls[7].body, {
+      name: 'name', project_path: '/app', agent: 'claude-code', worktree_id: 3, sandbox: false,
+    });
   } finally { globalThis.fetch = original; }
 });
 

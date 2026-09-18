@@ -77,7 +77,8 @@ headers, so this only works if you add them — the supported path is `WEB_ROOT`
   free-form denial reason), and AskUserQuestion cards.
 - **Auto-approve** — per-session toggles for writes and shell commands.
   Auto-approved tools still appear in the transcript, marked as such.
-- **Pi sandbox** — enabled by default in the new-session dialog, including
+- **Sandbox** — supported for Pi and Claude Code, enabled by default in the
+  new-session dialog, including
   worktree sessions. Session settings can change it between turns; changes save
   immediately and apply to the next agent turn without resetting the conversation.
   This restricts agent file access, not networking or direct `!` commands, and is
@@ -184,7 +185,7 @@ session cannot grow the DOM without bound.
 
 ### Sandbox settings are confirmed server state
 
-Pi's Sandbox switch saves a dedicated `PATCH` immediately, independently of the
+The Sandbox switch for Pi and Claude Code saves a dedicated `PATCH` immediately, independently of the
 session dialog's Save/Cancel actions. It retains the last confirmed value while
 saving and reports failures without retrying or stopping a turn. Running,
 awaiting-approval, disconnected, and loading sessions cannot change it. New agent
