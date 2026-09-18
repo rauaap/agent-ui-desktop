@@ -45,7 +45,7 @@ export class SessionPane {
 
     this.socket = new SessionSocket(sessionId, store, (event) => {
       handlers.onLiveEvent?.(sessionId, event);
-    });
+    }, () => handlers.onConnected?.(sessionId));
     this.completionOpen = false;
     this.completionResults = [];
     this.completionIndex = 0;
@@ -408,6 +408,10 @@ export class SessionPane {
       }
     } else {
       const state = this.store.session(this.id);
+      if (state.sandboxSaving) {
+        this.handlers.onError('Wait for the sandbox setting to finish saving before starting a turn');
+        return;
+      }
       if (isBusy(state.status)) {
         // Rejected, but the text stays put: it is still worth sending once the
         // turn ends, and it may be what you want to run as a command instead.

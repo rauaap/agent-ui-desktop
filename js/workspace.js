@@ -42,6 +42,7 @@ export class Workspace {
       onUnarchive: this.handlers.onUnarchive,
       onError: this.handlers.onError,
       onLiveEvent: this.handlers.onLiveEvent,
+      onConnected: this.handlers.onConnected,
     });
     this.pane.root.classList.add('active');
     this.dom.panes.appendChild(this.pane.root);

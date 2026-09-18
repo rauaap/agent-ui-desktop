@@ -93,6 +93,11 @@ function blankState(id) {
     archivedAt: null,
     autoApproveWrite: false,
     autoApproveCommand: false,
+    sandbox: null, // Missing on older servers means unknown, not enabled.
+    sandboxSaving: false,
+    settingsLoaded: false,
+    sessionReady: false,
+    connectionEpoch: 0,
     connected: false,
     rows: [],
     nextKey: 1,
@@ -108,6 +113,8 @@ function blankState(id) {
 
 export class Store {
   constructor() {
+    // Unique even if a pane is forgotten and the same session is reopened.
+    this.connectionEpoch = 0;
     /** @type {Map<string, object>} */
     this.states = new Map();
     /** @type {Map<string, Set<Function>>} */
@@ -168,8 +175,12 @@ export class Store {
   setConnected(id, connected) {
     const state = this.session(id);
     if (state.connected === connected) return;
-    state.connected = connected;
-    this.emit(id, [{ op: 'meta' }]);
+    this.setMeta(id, {
+      connected,
+      settingsLoaded: false,
+      sessionReady: false,
+      connectionEpoch: ++this.connectionEpoch,
+    });
   }
 
   /* ---------------------------------------------------------------- */
@@ -198,6 +209,11 @@ export class Store {
       archivedAt: live.archivedAt,
       autoApproveWrite: live.autoApproveWrite,
       autoApproveCommand: live.autoApproveCommand,
+      sandbox: live.sandbox,
+      sandboxSaving: live.sandboxSaving,
+      settingsLoaded: live.settingsLoaded,
+      sessionReady: live.sessionReady,
+      connectionEpoch: live.connectionEpoch,
       nextKey: live.nextKey,
     });
     this.replays.set(id, shadow);
@@ -233,6 +249,15 @@ export class Store {
 
   /** Apply one server event, notifying subscribers of what changed. */
   apply(id, event) {
+    // Settings are never replayed history. Apply immediately to both copies so
+    // a dropped replay cannot lose a live settings update.
+    if (event.type === 'settings') {
+      const changes = reduce(this.session(id), event);
+      const shadow = this.replays.get(id);
+      if (shadow) reduce(shadow, event);
+      this.emit(id, changes);
+      return;
+    }
     const replaying = this.replays.get(id);
     const state = replaying ?? this.session(id);
     const changes = reduce(state, event);
@@ -317,6 +342,7 @@ export function reduce(state, event) {
     }
 
     case 'settings':
+      if (typeof event.sandbox === 'boolean') state.sandbox = event.sandbox;
       if (typeof event.auto_approve_write === 'boolean') {
         state.autoApproveWrite = event.auto_approve_write;
       }

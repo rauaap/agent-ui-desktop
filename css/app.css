@@ -1396,6 +1396,11 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.55); }
   padding: 14px 18px 16px;
 }
 
+.dlg-note:empty,
+.dlg-error:empty {
+  display: none;
+}
+
 .dlg-error {
   flex: none;
   margin: 0 18px;

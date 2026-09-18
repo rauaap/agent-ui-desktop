@@ -77,6 +77,11 @@ headers, so this only works if you add them — the supported path is `WEB_ROOT`
   free-form denial reason), and AskUserQuestion cards.
 - **Auto-approve** — per-session toggles for writes and shell commands.
   Auto-approved tools still appear in the transcript, marked as such.
+- **Pi sandbox** — enabled by default in the new-session dialog, including
+  worktree sessions. Session settings can change it between turns; changes save
+  immediately and apply to the next agent turn without resetting the conversation.
+  This restricts agent file access, not networking or direct `!` commands, and is
+  independent of auto-approval. Other agents do not support it.
 - **Desktop notifications** — one switch in the sidebar watches the selected
   session while the app is in the background. It fires when a turn completes
   or an approval blocks, and stays quiet while that session is on screen.
@@ -109,6 +114,7 @@ js/
   completion.js       local path matching, shell token parsing and escaping
   message-history.js  prompt/command recall and draft restoration — no DOM
   store.js            selected-session state and transcript reducer — no DOM
+  session-settings.js settings reconciliation and sandbox save guards — no DOM
   tools.js            canonical action validation, labels, and summaries
   sidebar.js          the project/session tree, and the archive below it
   archive.js          reading `archived_at`: split, order, label — no DOM
@@ -175,6 +181,21 @@ buffered replay.
 
 The live transcript is capped at 400 rows, dropped from the top, so a very long
 session cannot grow the DOM without bound.
+
+### Sandbox settings are confirmed server state
+
+Pi's Sandbox switch saves a dedicated `PATCH` immediately, independently of the
+session dialog's Save/Cancel actions. It retains the last confirmed value while
+saving and reports failures without retrying or stopping a turn. Running,
+awaiting-approval, disconnected, and loading sessions cannot change it. New agent
+prompts are blocked while the save is pending; direct shell commands are not.
+
+The session catalog and selected pane consume both PATCH responses and live
+`settings` frames. There is no settings snapshot on WebSocket connect, so each
+connection refreshes REST state, as do polling, window focus, and returning to a
+visible tab. Settings frames received during a REST request take precedence over
+that older response, including while transcript replay is buffered. A missing
+`sandbox` field from an older server is unknown, never an enabled claim.
 
 ### Bash mode runs beside the agent, not through it
 
@@ -411,7 +432,9 @@ settings.
 The pure modules — the diff, the markdown parser, the reducer, file-tree protocol
 state, Bash completion and escaping, the worktree path template, session
 location and detachment, the id coercion, the agent list, and the archive's
-split and ordering — have unit tests, most ported from the Android
+split and ordering — have unit tests. Sandbox tests also cover settings races,
+reconnects, pending-save guards, and mocked REST contracts. Most of the original
+tests were ported from the Android
 client's `LineDiffTest`, `MarkdownTest` and `WorktreeTest`:
 
 ```sh

@@ -11,6 +11,7 @@ import * as api from './api.js';
 import { agentPreference, setAgentPreference } from './agents.js';
 import { partition } from './archive.js';
 import { Store, isBusy } from './store.js';
+import { SettingsSync, settingsMeta } from './session-settings.js';
 import { Sidebar, belongsTo } from './sidebar.js';
 import { Workspace } from './workspace.js';
 import { Notifier } from './notify.js';
@@ -31,6 +32,10 @@ import { baseOf, isFormerWorktree, normalize } from './worktree.js';
 
 const store = new Store();
 const notifier = new Notifier(store);
+const settingsSync = new SettingsSync();
+let catalogRequest = 0;
+let catalogAccepted = 0;
+let projectsAccepted = 0;
 
 /** Server-side rows from the last refresh. */
 let projects = [];
@@ -70,8 +75,10 @@ const workspace = new Workspace(
     onStop: stopSession,
     onUnarchive: (id) => setSessionArchived(id, false),
     onError: (message) => toast(message, true),
+    onConnected: () => refresh(),
     onLiveEvent: (id, event) => {
       notifier.observe(id, event);
+      if (event.type === 'settings') acceptSettings({ ...event, id });
       if (event.type === 'status') {
         // The selected session's socket is newer than the poller. Patch the
         // catalog row in place so the sidebar follows it immediately, and keep
@@ -123,6 +130,10 @@ notifier.onActivate = (id) => {
 const dismissNotifications = () => notifier.dismissActive();
 document.addEventListener('visibilitychange', dismissNotifications);
 window.addEventListener('focus', dismissNotifications);
+window.addEventListener('focus', () => refresh());
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'hidden') refresh();
+});
 
 /**
  * Map a server session row onto the store's metadata fields.
@@ -141,8 +152,8 @@ const metaFrom = (session, project) => ({
   agent: session.agent,
   status: session.status,
   archivedAt: session.archived_at ?? null,
-  autoApproveWrite: !!session.auto_approve_write,
-  autoApproveCommand: !!session.auto_approve_command,
+  ...settingsMeta(session),
+  sandboxSaving: settingsSync.pending.has(String(session.id)),
 });
 
 /** Resolve the project row that gives a session's project-directory path. */
@@ -159,7 +170,8 @@ const locationMetaFrom = (session, project) => ({
 /**
  * Metadata a REST snapshot may write without overruling the selected session's
  * live socket. Location is REST-owned because worktree detachment is not
- * replayed; the socket owns status, settings, archive state and the name.
+ * replayed; status, archive state and name remain socket-owned. Settings are
+ * reconciled separately because there is no settings snapshot on connect.
  */
 const metaFor = (session) => (workspace.isOpen(session.id)
   ? locationMetaFrom(session, projectFor(session))
@@ -169,7 +181,17 @@ const metaFor = (session) => (workspace.isOpen(session.id)
 /* data                                                               */
 /* ------------------------------------------------------------------ */
 
-function acceptSessions(sessions, fullRefresh = false) {
+/** Tie a REST read to this connection; a pre-reconnect read cannot unlock it. */
+function connectionSnapshot() {
+  const id = workspace.activeId;
+  if (!id || !store.has(id)) return null;
+  return { id, epoch: store.session(id).connectionEpoch };
+}
+
+function acceptSessions(sessions, fullRefresh, since, requestId, connection) {
+  if (requestId < catalogAccepted) return false;
+  catalogAccepted = requestId;
+  sessions = sessions.map((row) => settingsSync.reconcile(row, since));
   // A poll may have started before the selected session's latest socket event.
   // Preserve the socket-owned status in both representations rather than
   // letting that older response make the sidebar jump backwards.
@@ -181,17 +203,51 @@ function acceptSessions(sessions, fullRefresh = false) {
   // `"1"` without saying so.
   sessionsById = new Map(sessions.map((session) => [String(session.id), session]));
 
-  // Only the selected session has runtime state. Polling refreshes its location,
-  // which its socket does not replay, without touching socket-owned metadata.
-  if (active) store.setMeta(active.id, metaFor(active));
+  // Settings have no connect-time snapshot or replay: REST initializes them.
+  if (active) {
+    const state = store.session(active.id);
+    const loaded = state.connected && connection?.id === active.id
+      && connection.epoch === state.connectionEpoch;
+    store.setMeta(active.id, {
+      ...metaFor(active), ...settingsMeta(active),
+      ...(loaded ? { settingsLoaded: true } : {}),
+    });
+  }
 
   if (fullRefresh) sidebar.setData(projects, sessions, worktrees, agents);
   else sidebar.setSessions(sessions);
   sidebar.setActive(workspace.activeId);
   workspace.pruneMissing(new Set(sessionsById.keys()));
+  return true;
+}
+
+/** Apply confirmed settings to both the catalog and the selected runtime. */
+function acceptSettings(row) {
+  const id = String(row.id);
+  settingsSync.record(id, row);
+  const current = sessionsById.get(id);
+  const meta = {};
+  for (const [wire, local] of Object.entries({
+    sandbox: 'sandbox', auto_approve_write: 'autoApproveWrite', auto_approve_command: 'autoApproveCommand',
+  })) {
+    if (typeof row[wire] !== 'boolean') continue;
+    if (current) current[wire] = row[wire];
+    meta[local] = row[wire];
+  }
+  if (store.has(id)) store.setMeta(id, meta);
+}
+
+async function patchSettings(request) {
+  const since = settingsSync.checkpoint();
+  const row = settingsSync.reconcile(await request(), since);
+  acceptSettings(row);
+  return row;
 }
 
 async function refresh() {
+  const connection = connectionSnapshot();
+  const since = settingsSync.checkpoint();
+  const requestId = ++catalogRequest;
   try {
     // Worktrees come along unfiltered: they are wanted in three places — the
     // tree's tooltips, the new-session picker and project settings — and one
@@ -207,10 +263,16 @@ async function refresh() {
       api.listWorktrees(),
       api.listAgents().catch(() => agents),
     ]);
-    projects = nextProjects;
-    worktrees = nextWorktrees;
-    agents = nextAgents;
-    acceptSessions(sessions, true);
+    // A faster session-only poll must not discard this refresh's project data.
+    if (requestId >= projectsAccepted) {
+      projectsAccepted = requestId;
+      projects = nextProjects;
+      worktrees = nextWorktrees;
+      agents = nextAgents;
+    }
+    if (!acceptSessions(sessions, true, since, requestId, connection)) {
+      sidebar.setData(projects, [...sessionsById.values()], worktrees, agents);
+    }
     return { projects, sessions, worktrees };
   } catch (error) {
     fail(error);
@@ -226,7 +288,10 @@ async function pollSessions() {
   if (pollInFlight || document.visibilityState === 'hidden') return;
   pollInFlight = true;
   try {
-    acceptSessions(await api.listSessions());
+    const connection = connectionSnapshot();
+    const since = settingsSync.checkpoint();
+    const requestId = ++catalogRequest;
+    acceptSessions(await api.listSessions(), false, since, requestId, connection);
   } catch {
     // Keep the last useful catalog through a transient polling failure. Manual
     // refreshes still surface errors when the user explicitly asks for one.
@@ -387,18 +452,10 @@ async function setSessionPermissions(session, write, command) {
   const id = String(session.id);
   const previous = permissionUpdates.get(id) || Promise.resolve();
   const update = previous.catch(() => {}).then(async () => {
-    await api.setAutoApprove(id, write, command);
-    const current = sessionsById.get(id);
-    if (current) {
-      current.auto_approve_write = write;
-      current.auto_approve_command = command;
-    }
-    session.auto_approve_write = write;
-    session.auto_approve_command = command;
-    if (store.has(id)) store.setMeta(id, {
-      autoApproveWrite: write,
-      autoApproveCommand: command,
-    });
+    const row = await patchSettings(() => api.setAutoApprove(id, write, command));
+    session.auto_approve_write = row.auto_approve_write;
+    session.auto_approve_command = row.auto_approve_command;
+    if (typeof row.sandbox === 'boolean') session.sandbox = row.sandbox;
   });
   permissionUpdates.set(id, update);
   try {
@@ -637,7 +694,9 @@ async function createSession(project) {
   });
   if (!spec) return;
   try {
-    const session = await api.createSession(spec.name, project.path, spec.agent, spec.worktreeId);
+    const session = await api.createSession(
+      spec.name, project.path, spec.agent, spec.worktreeId, spec.sandbox,
+    );
     await refresh();
     // Creating a session makes its project the most recently active, so the
     // server moves that project to the head of the freshly rendered tree.
@@ -668,7 +727,26 @@ async function openSessionSettings(id) {
     command: state.autoApproveCommand,
     archived: !!state.archivedAt,
   };
-  const result = await sessionSettingsDialog(state);
+  const result = await sessionSettingsDialog(state, {
+    getState: () => store.has(id) ? store.session(id) : { ...state, connected: false },
+    subscribe: (paint) => store.subscribe(id, paint),
+    onError: fail,
+    saveSandbox: async (value) => {
+      try {
+        await settingsSync.saveSandbox(id, value, {
+          getState: () => store.session(id),
+          setPending: (sandboxSaving) => {
+            if (store.has(id)) store.setMeta(id, { sandboxSaving });
+          },
+          patch: api.setSandbox,
+          accept: acceptSettings,
+        });
+      } catch (error) {
+        if (error.status === 404) await refresh();
+        throw error;
+      }
+    },
+  });
   if (!result) return;
 
   if (result.detached) {
@@ -708,11 +786,15 @@ async function openSessionSettings(id) {
   try {
     // PATCH is a partial update, so only send what actually changed.
     if (result.name && result.name !== before.name) {
-      await api.renameSession(id, result.name);
+      await patchSettings(() => api.renameSession(id, result.name));
     }
     if (result.autoApproveWrite !== before.write
         || result.autoApproveCommand !== before.command) {
-      await api.setAutoApprove(id, result.autoApproveWrite, result.autoApproveCommand);
+      await patchSettings(() => api.setAutoApprove(
+        id,
+        result.autoApproveWrite !== before.write ? result.autoApproveWrite : undefined,
+        result.autoApproveCommand !== before.command ? result.autoApproveCommand : undefined,
+      ));
     }
     // Last, and on its own: it is the one field here that can be refused (409
     // while the session is busy), and a refusal should not also lose the rename

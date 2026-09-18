@@ -21,11 +21,14 @@ export class SessionSocket {
    * @param {import('./store.js').Store} store
    * @param {(event: object) => void} [onLiveEvent] called for events that are
    *   not replayed scrollback — what a notifier should react to
+   * @param {() => void} [onConnected] refresh REST metadata on every connection;
+   *   the socket never supplies a settings snapshot
    */
-  constructor(id, store, onLiveEvent) {
+  constructor(id, store, onLiveEvent, onConnected) {
     this.id = id;
     this.store = store;
     this.onLiveEvent = onLiveEvent;
+    this.onConnected = onConnected;
     this.socket = null;
     this.attempt = 0;
     this.timer = null;
@@ -63,6 +66,7 @@ export class SessionSocket {
     socket.onopen = () => {
       this.attempt = 0;
       this.store.setConnected(this.id, true);
+      this.onConnected?.();
     };
 
     socket.onmessage = (message) => {
@@ -84,7 +88,8 @@ export class SessionSocket {
       }
       this.everReceived = true;
       this.store.apply(this.id, event);
-      if (!this.replayPending) this.onLiveEvent?.(event);
+      if (event.type === 'status') this.store.setMeta(this.id, { sessionReady: true });
+      if (!this.replayPending || event.type === 'settings') this.onLiveEvent?.(event);
     };
 
     socket.onclose = () => {
@@ -102,6 +107,7 @@ export class SessionSocket {
 
   /** Send a prompt, starting a turn. */
   sendInput(text) {
+    if (this.store.session(this.id).sandboxSaving) return false;
     return this.send({ type: 'input', text });
   }
 

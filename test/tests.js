@@ -1152,4 +1152,6 @@ test('store: REST detachment during replay is not swapped back out', () => {
   assertTrue(isFormerWorktree(store.session('s')));
 });
 
+results.push(...(await import('./session-settings-tests.js')).results);
+
 export { results };

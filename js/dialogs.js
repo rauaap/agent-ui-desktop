@@ -9,6 +9,7 @@ import { preferredAgent } from './agents.js';
 import { filedLabel, isArchived, partition } from './archive.js';
 import { suggestName } from './names.js';
 import { isBusy } from './store.js';
+import { canChangeSandbox } from './session-settings.js';
 import {
   DEFAULT_TEMPLATE,
   absolutize,
@@ -98,6 +99,7 @@ function show(spec) {
       }
     });
     dialog.addEventListener('close', () => {
+      spec.onClose?.();
       dialog.remove();
       resolve(settled);
     });
@@ -622,6 +624,7 @@ const NEW_WORKTREE = '\0new';
 export function newSessionDialog(project, worktrees = [], agents = [], handlers = {}) {
   let nameInput;
   let agentSelect = null;
+  let sandboxToggle;
   let picked = '';
   const list = [...worktrees];
 
@@ -651,6 +654,16 @@ export function newSessionDialog(project, worktrees = [], agents = [], handlers 
         wrap.appendChild(agentSelect);
         body.appendChild(wrap);
       }
+
+      const sandboxField = el('div');
+      sandboxToggle = toggle(sandboxField, 'Sandbox',
+        'Restricts agent file access. Applies to agent turns, not direct shell commands.', true);
+      const paintSandbox = () => {
+        sandboxField.style.display = agentSelect?.value === 'pi' ? '' : 'none';
+      };
+      agentSelect?.addEventListener('change', paintSandbox);
+      paintSandbox();
+      body.appendChild(sandboxField);
 
       // Nowhere else for the session to run, so there is no choice to offer.
       // `is_git_repo` is a stat of `<path>/.git` and only a hint — the server
@@ -743,7 +756,10 @@ export function newSessionDialog(project, worktrees = [], agents = [], handlers 
     collect: () => {
       const name = nameInput.value.trim();
       if (!name) throw new Error('Give the session a name');
-      return { name, agent: agentSelect ? agentSelect.value : null, worktreeId: picked || null };
+      return {
+        name, agent: agentSelect ? agentSelect.value : null, worktreeId: picked || null,
+        ...(agentSelect?.value === 'pi' ? { sandbox: sandboxToggle.checked } : {}),
+      };
     },
   });
 }
@@ -862,25 +878,68 @@ export function createWorktreeDialog(
 
 /**
  * Session settings: rename, auto-approve toggles, archive, detach, delete.
+ * Sandbox saves immediately through its dedicated handler; Cancel does not undo
+ * a confirmed sandbox change. The control subscribes to live session metadata.
  *
  * Resolves `{name, autoApproveWrite, autoApproveCommand, archived, detached, deleted}`,
  * or null.
  *
  * @param {object} state the store's session state
  */
-export function sessionSettingsDialog(state) {
+export function sessionSettingsDialog(state, handlers = {}) {
   let nameInput;
   let writeToggle;
   let commandToggle;
   let archiveToggle;
   let detached = false;
   let deleted = false;
+  let unsubscribe;
 
   return show({
     title: 'Session settings',
+    onClose: () => unsubscribe?.(),
     confirm: 'Save',
     body: (body, submit) => {
       nameInput = field(body, 'Name', state.name);
+
+      if (state.agent === 'pi') {
+        const sandboxToggle = toggle(body, 'Sandbox',
+          'Restricts agent file access, not direct shell commands. Saves immediately. '
+          + 'Sandbox can only be changed between turns.', state.sandbox === true);
+        const sandboxNote = el('div', 'dlg-note');
+        const sandboxError = el('div', 'dlg-error');
+        sandboxError.setAttribute('role', 'alert');
+        body.append(sandboxNote, sandboxError);
+        const current = () => handlers.getState?.() || state;
+        const paint = () => {
+          const latest = current();
+          sandboxToggle.checked = latest.sandbox === true;
+          sandboxToggle.indeterminate = typeof latest.sandbox !== 'boolean';
+          sandboxToggle.disabled = !handlers.saveSandbox || !canChangeSandbox(latest);
+          sandboxNote.textContent = latest.sandboxSaving ? 'Saving sandbox setting…'
+            : !latest.connected || !latest.settingsLoaded || !latest.sessionReady
+              ? 'Waiting for session state…'
+              : typeof latest.sandbox !== 'boolean'
+                ? 'Sandbox availability is unknown on this server.' : '';
+        };
+        sandboxToggle.addEventListener('change', async () => {
+          const wanted = sandboxToggle.checked;
+          paint(); // Pessimistic: restore the last server-confirmed value.
+          sandboxError.textContent = '';
+          try {
+            await handlers.saveSandbox(wanted);
+          } catch (error) {
+            if (sandboxError.isConnected) sandboxError.textContent = error.message;
+            else handlers.onError?.(error);
+          } finally {
+            paint();
+          }
+        });
+        unsubscribe = handlers.subscribe?.(paint);
+        paint();
+      } else {
+        body.appendChild(el('div', 'dlg-note', 'Sandbox not supported for this agent'));
+      }
 
       writeToggle = toggle(
         body,

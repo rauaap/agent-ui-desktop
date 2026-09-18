@@ -184,13 +184,17 @@ export const listSessions = () => request('GET', '/sessions').then(each(asSessio
  * from: the field is optional and the server's own default is a better answer
  * than a name this client made up.
  */
-export const createSession = (name, projectPath, agent, worktreeId = null) =>
+export const createSession = (name, projectPath, agent, worktreeId = null, sandbox) =>
   request('POST', '/sessions', {
     name,
     project_path: projectPath,
     ...(agent ? { agent } : {}),
     worktree_id: wireId(worktreeId),
+    ...(typeof sandbox === 'boolean' ? { sandbox } : {}),
   }).then(asSession);
+
+export const setSandbox = (id, sandbox) =>
+  request('PATCH', `/sessions/${id}`, { sandbox }).then(asSession);
 
 export const renameSession = (id, name) =>
   request('PATCH', `/sessions/${id}`, { name }).then(asSession);
