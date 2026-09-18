@@ -28,7 +28,10 @@ export function toHtml(md) {
   const out = [];
 
   let paragraph = [];
-  let list = null; // { ordered: boolean, items: string[] }
+  // Each list item is an array of paragraph HTML strings. Keeping the list
+  // open across indented continuation lines is what prevents each marker from
+  // becoming a separate <ol>.
+  let list = null;
 
   const flushParagraph = () => {
     if (!paragraph.length) return;
@@ -39,7 +42,14 @@ export function toHtml(md) {
   const flushList = () => {
     if (!list) return;
     const tag = list.ordered ? 'ol' : 'ul';
-    out.push(`<${tag}>${list.items.map((item) => `<li>${item}</li>`).join('')}</${tag}>`);
+    const start = list.ordered && list.start !== 1 ? ` start="${list.start}"` : '';
+    const items = list.items.map((item) => {
+      const content = list.loose
+        ? item.map((part) => `<p>${part}</p>`).join('')
+        : item.join('');
+      return `<li>${content}</li>`;
+    }).join('');
+    out.push(`<${tag}${start}>${items}</${tag}>`);
     list = null;
   };
 
@@ -51,6 +61,24 @@ export function toHtml(md) {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     const trimmed = line.trim();
+    const leadingSpaces = line.length - line.trimStart().length;
+
+    // Text indented to the content column belongs to the current list item.
+    // This covers the common agent-output form where a bold summary is followed
+    // by an indented explanatory line. This parser intentionally flattens such
+    // continuation lines rather than implementing nested Markdown blocks.
+    if (list && trimmed && leadingSpaces >= list.continuationIndent) {
+      const item = list.items[list.items.length - 1];
+      const content = inline(line.slice(list.continuationIndent).trim());
+      if (list.pendingBlank) {
+        list.loose = true;
+        item.push(content);
+      } else {
+        item[item.length - 1] += `<br>${content}`;
+      }
+      list.pendingBlank = false;
+      continue;
+    }
 
     // A closing fence must be bare and at least as long as its opener. Fences
     // inside the block are literal content; use a longer outer fence to show
@@ -74,9 +102,12 @@ export function toHtml(md) {
       continue;
     }
 
-    // blank line ends whatever block was open
+    // A blank line ends a paragraph, but a following marker can still continue
+    // the same list. In CommonMark that makes a "loose" list, whose item
+    // contents are paragraphs rather than terminating the list container.
     if (!trimmed) {
-      flush();
+      flushParagraph();
+      if (list) list.pendingBlank = true;
       continue;
     }
 
@@ -94,9 +125,20 @@ export function toHtml(md) {
       flushParagraph();
       if (!list || list.ordered) {
         flushList();
-        list = { ordered: false, items: [] };
+        list = {
+          ordered: false,
+          start: 1,
+          items: [],
+          loose: false,
+          pendingBlank: false,
+          continuationIndent: leadingSpaces + 2,
+        };
+      } else if (list.pendingBlank) {
+        list.loose = true;
       }
-      list.items.push(inline(trimmed.slice(2).trim()));
+      list.pendingBlank = false;
+      list.continuationIndent = leadingSpaces + 2;
+      list.items.push([inline(trimmed.slice(2).trim())]);
       continue;
     }
 
@@ -107,9 +149,20 @@ export function toHtml(md) {
       flushParagraph();
       if (!list || !list.ordered) {
         flushList();
-        list = { ordered: true, items: [] };
+        list = {
+          ordered: true,
+          start: Number(trimmed.slice(0, d)),
+          items: [],
+          loose: false,
+          pendingBlank: false,
+          continuationIndent: leadingSpaces + d + 2,
+        };
+      } else if (list.pendingBlank) {
+        list.loose = true;
       }
-      list.items.push(inline(trimmed.slice(d + 2).trim()));
+      list.pendingBlank = false;
+      list.continuationIndent = leadingSpaces + d + 2;
+      list.items.push([inline(trimmed.slice(d + 2).trim())]);
       continue;
     }
 

@@ -181,6 +181,29 @@ test('md: numbered list groups items', () => {
   assertEqual(toHtml('1. one\n2. two'), '<ol><li>one</li><li>two</li></ol>');
 });
 
+test('md: blank-separated markers form one loose numbered list', () => {
+  assertEqual(
+    toHtml('1. one\n\n1. two\n\n1. three'),
+    '<ol><li><p>one</p></li><li><p>two</p></li><li><p>three</p></li></ol>',
+  );
+});
+
+test('md: indented lines continue loose numbered-list items', () => {
+  assertEqual(
+    toHtml('1. **First.**  \n   First explanation.\n\n2. **Second.**  \n   Second explanation.'),
+    '<ol><li><p><strong>First.</strong><br>First explanation.</p></li>'
+      + '<li><p><strong>Second.</strong><br>Second explanation.</p></li></ol>',
+  );
+});
+
+test('md: a newly started ordered list preserves its starting number', () => {
+  assertEqual(toHtml('3. three\n4. four'), '<ol start="3"><li>three</li><li>four</li></ol>');
+});
+
+test('md: a blank line before prose still ends a list', () => {
+  assertEqual(toHtml('1. one\n\nafter'), '<ol><li>one</li></ol><p>after</p>');
+});
+
 test('md: fenced code block is escaped verbatim', () => {
   assertEqual(
     toHtml('```\n<b>&</b>\n```'),
