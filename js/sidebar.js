@@ -126,6 +126,11 @@ export class Sidebar {
     this.paintSelection();
   }
 
+  /** Follow a newly active project after the server moves it to the top. */
+  scrollToTop() {
+    this.root.scrollTop = 0;
+  }
+
   /**
    * A line describing where a worktree session runs, or null for one running in
    * the project directory.
@@ -256,17 +261,18 @@ export class Sidebar {
     if (!open) return;
 
     const list = el('div', 'sessions');
-    for (const session of sessions) {
-      list.appendChild(this.sessionRow(session, project, inArchive));
-    }
 
-    // No "New session" in the archive: the server refuses one in an archived
-    // project, and in a live project it would land in the tree above, several
-    // rows from where it was asked for.
+    // Keep the frequent creation action first, before the project's existing
+    // sessions. There is no equivalent in the archive: the server refuses one
+    // in an archived project, and for a live project it would land above.
     if (!inArchive) {
       const add = el('button', 'add-row', '+  New session');
       add.addEventListener('click', () => this.handlers.onNewSession(project));
       list.appendChild(add);
+    }
+
+    for (const session of sessions) {
+      list.appendChild(this.sessionRow(session, project, inArchive));
     }
 
     this.root.appendChild(list);

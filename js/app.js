@@ -639,6 +639,9 @@ async function createSession(project) {
   try {
     const session = await api.createSession(spec.name, project.path, spec.agent, spec.worktreeId);
     await refresh();
+    // Creating a session makes its project the most recently active, so the
+    // server moves that project to the head of the freshly rendered tree.
+    sidebar.scrollToTop();
     store.setMeta(session.id, metaFrom(session, projectFor(session)));
     workspace.openSession(session.id);
   } catch (error) {
