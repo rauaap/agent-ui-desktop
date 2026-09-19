@@ -223,6 +223,37 @@ await test('sandbox API: creation preserves false and numeric worktree ids; PATC
   } finally { globalThis.fetch = original; }
 });
 
+await test('sandbox paths API: fresh defaults and atomic scope replacements', async () => {
+  const original = globalThis.fetch;
+  const calls = [];
+  const paths = [{ path: '$HOME/tool config', write: false }, { path: '~/cache', write: true }];
+  globalThis.fetch = async (url, options) => {
+    calls.push({ path: new URL(url).pathname, method: options.method,
+      body: options.body === undefined ? undefined : JSON.parse(options.body) });
+    return { ok: true, text: async () => JSON.stringify({ id: 7, sandbox_paths: paths }) };
+  };
+  try {
+    equal((await api.getSandboxPaths()).sandbox_paths, paths);
+    await api.setSandboxPaths(paths);
+    await api.setSandboxPaths([]);
+    equal((await api.setProjectSandboxPaths('/app', paths)).id, '7');
+    await api.setProjectSandboxPaths('/app', []);
+    equal(calls, [
+      { path: '/sandbox-paths', method: 'GET', body: undefined },
+      { path: '/sandbox-paths', method: 'PATCH', body: { sandbox_paths: paths } },
+      { path: '/sandbox-paths', method: 'PATCH', body: { sandbox_paths: [] } },
+      { path: '/projects', method: 'PATCH', body: { path: '/app', sandbox_paths: paths } },
+      { path: '/projects', method: 'PATCH', body: { path: '/app', sandbox_paths: [] } },
+    ]);
+    globalThis.fetch = async () => ({ ok: false, status: 400,
+      text: async () => JSON.stringify({ detail: 'sandbox_paths[0]: path does not exist: ~/missing' }) });
+    let caught;
+    try { await api.setSandboxPaths([{ path: '~/missing' }]); } catch (error) { caught = error; }
+    equal(caught?.message, 'sandbox_paths[0]: path does not exist: ~/missing');
+    equal(caught?.status, 400);
+  } finally { globalThis.fetch = original; }
+});
+
 await test('sandbox API: FastAPI 409, 404 and validation arrays remain readable', async () => {
   const original = globalThis.fetch;
   try {

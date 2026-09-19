@@ -6,6 +6,7 @@
  */
 
 import { preferredAgent } from './agents.js';
+import { sandboxPathEntries, isExactOverride } from './sandbox-paths.js';
 import { filedLabel, isArchived, partition } from './archive.js';
 import { suggestName } from './names.js';
 import { isBusy } from './store.js';
@@ -93,7 +94,7 @@ function show(spec) {
     cancel.addEventListener('click', () => dialog.close());
     // Enter anywhere in the form confirms, Esc cancels (native).
     dialog.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter' && event.target.tagName !== 'TEXTAREA') {
+      if (event.key === 'Enter' && !['TEXTAREA', 'BUTTON'].includes(event.target.tagName)) {
         event.preventDefault();
         attempt();
       }
@@ -245,7 +246,8 @@ export const setWorktreeTemplate = (template) => {
 const SAMPLE_BRANCH = 'feature/fix-login';
 
 /**
- * Client settings. Both values are local to this browser: the server receives
+ * Browser preferences, plus an entry point to server sandbox settings.
+ * Both preference values are local to this browser: the server receives
  * the chosen agent when a session is created, and receives an already-expanded
  * absolute worktree path.
  *
@@ -255,12 +257,17 @@ const SAMPLE_BRANCH = 'feature/fix-login';
 export function appSettingsDialog(template, sampleProject, agents = [], agent = null) {
   let input;
   let agentSelect;
+  let action;
   const project = sampleProject || '/projects/app';
 
   return show({
     title: 'Settings',
     confirm: 'Save',
-    body: (body) => {
+    body: (body, submit) => {
+      const paths = el('button', 'btn', 'Server sandbox paths…');
+      paths.addEventListener('click', () => { action = 'sandbox-paths'; submit(); });
+      body.appendChild(paths);
+      body.appendChild(el('div', 'dlg-label', 'Browser preferences'));
       if (agents.length) {
         const wrap = el('div', 'field');
         wrap.appendChild(el('label', null, 'Default agent'));
@@ -303,9 +310,108 @@ export function appSettingsDialog(template, sampleProject, agents = [], agent = 
         + `%P/%N-%b would put this one two directories down rather than beside the project.`));
     },
     collect: () => ({
+      action,
       template: input.value.trim() || DEFAULT_TEMPLATE,
       agent: agentSelect ? agentSelect.value : undefined,
     }),
+  });
+}
+
+/** Save a whole scope in one request; rejected drafts stay open and editable. */
+export function sandboxPathsDialog(entries, defaults, save, projectName = null) {
+  const project = projectName !== null;
+  const rows = [];
+  let list;
+  let inherited;
+  const paintInheritance = () => {
+    if (!project) return;
+    inherited.replaceChildren();
+    for (const entry of defaults) {
+      const overridden = rows.some((row) => row.path.value === entry.path);
+      const item = el('div', 'sandbox-inherited');
+      item.appendChild(el('div', 'mono', entry.path));
+      item.appendChild(el('div', 'dlg-note',
+        `Server default: ${entry.write ? 'read/write' : 'read-only'}${overridden ? ' · overridden below' : ' · inherited unless overridden by an equivalent path'}`));
+      const override = el('button', 'btn', 'Override for project');
+      override.disabled = overridden;
+      override.addEventListener('click', () => add(entry));
+      item.appendChild(override);
+      inherited.appendChild(item);
+    }
+    if (!defaults.length) inherited.appendChild(el('div', 'dlg-note', 'No server defaults.'));
+  };
+  const add = (entry = { path: '', write: false }) => {
+    const wrap = el('div', 'sandbox-path-row');
+    const path = field(wrap, 'Server path', entry.path, { mono: true });
+    path.placeholder = '~/.config/my-tool';
+    const write = toggle(wrap, 'Allow writes', 'Unchecked means read-only.', entry.write === true);
+    const label = el('div', 'dlg-note');
+    const remove = el('button', 'btn');
+    const row = { path, write, wrap };
+    const paint = () => {
+      const override = project && isExactOverride(path.value, defaults);
+      label.textContent = project ? (override ? 'Project override' : 'Project entry (addition or equivalent-path override)') : 'Server default';
+      remove.textContent = override ? 'Reset to server default' : 'Remove';
+      paintInheritance();
+    };
+    remove.addEventListener('click', () => {
+      rows.splice(rows.indexOf(row), 1);
+      wrap.remove();
+      paintInheritance();
+    });
+    path.addEventListener('input', paint);
+    wrap.append(label, remove);
+    rows.push(row);
+    list.appendChild(wrap);
+    paint();
+    return path;
+  };
+  return show({
+    title: project ? `Sandbox paths — ${projectName}` : 'Server sandbox paths',
+    confirm: 'Save paths',
+    body: (body) => {
+      body.appendChild(el('div', 'dlg-note',
+        'Files and directories on the server. Paths are preserved as entered; ~, ~user, $VAR and ${VAR} '
+        + 'expand using the server’s home and environment, not this browser. Expanded paths must be absolute and exist.'));
+      body.appendChild(el('div', 'dlg-note', project
+        ? 'Applies to future turns in this project’s sandboxed sessions and worktrees. Clearing project entries restores all server defaults; inherited paths cannot be removed.'
+        : 'Applies to future turns across all sandboxed sessions, for both Pi and Claude.'));
+      body.appendChild(el('div', 'dlg-note',
+        'Saving does not restart agents or revoke access from running turns. No effect with sandboxing disabled; direct user shell commands remain outside the sandbox.'));
+      body.appendChild(el('div', 'dlg-note warn',
+        'Read-only paths can expose credentials. Writable paths allow agents to change or delete host data. '
+        + 'Adding paths does not forward environment variables or change how programs find configuration. Conflicts with inherited or built-in mounts can fail a future turn.'));
+      if (project) {
+        body.appendChild(el('div', 'dlg-label', 'Inherited server defaults'));
+        inherited = el('div');
+        body.appendChild(inherited);
+        body.appendChild(el('div', 'dlg-note',
+          'The server matches expanded paths: ~/config and $HOME/config may be the same override. '
+          + 'Labels here compare text only. Remove an override to restore the server permission.'));
+      }
+      body.appendChild(el('div', 'dlg-label', project ? 'Project entries' : 'Server defaults'));
+      list = el('div');
+      body.appendChild(list);
+      for (const entry of entries) add(entry);
+      paintInheritance();
+      const buttons = el('div', 'dlg-buttons');
+      const plus = el('button', 'btn', '+ Add path');
+      plus.addEventListener('click', () => add().focus());
+      buttons.appendChild(plus);
+      const clear = el('button', 'btn', project ? 'Reset all to server defaults' : 'Clear all paths');
+      clear.addEventListener('click', () => {
+        rows.length = 0;
+        list.replaceChildren();
+        paintInheritance();
+      });
+      buttons.appendChild(clear);
+      body.appendChild(buttons);
+    },
+    collect: async () => {
+      const paths = sandboxPathEntries(rows.map((row) => ({ path: row.path.value, write: row.write.checked })));
+      await save(paths);
+      return true;
+    },
   });
 }
 
@@ -349,8 +455,8 @@ export function newProjectDialog() {
  * Project settings: what the server knows about a project, and the actions that
  * take the whole thing as their subject.
  *
- * **Its facts are read-only, and that is the API's doing rather than an
- * omission.** The one `PATCH /projects` carries `archived` and nothing else;
+ * Name and directory are read-only. `PATCH /projects` carries archive state
+ * and sandbox paths, but does not rename or move a project;
  * `POST` inserts with `OR IGNORE`, so re-posting an existing path under a new
  * name returns the project unchanged instead of renaming it. Moving a project's
  * path is on the server's roadmap (`projects.id` exists precisely so sessions
@@ -443,7 +549,7 @@ export function projectSettingsDialog(project, sessions, worktrees = [], busy = 
           + 'back. Unarchiving restores exactly the sessions this filed away — any '
           + 'archived by hand beforehand stay where they are.'
         : 'Name and directory are set when the project is created and cannot be '
-          + 'changed afterwards: the server has no endpoint that updates a project.'));
+          + 'changed afterwards. Sandbox access can be configured separately below.'));
 
       if (busy.length) {
         body.appendChild(el('div', 'dlg-note warn',
@@ -465,6 +571,9 @@ export function projectSettingsDialog(project, sessions, worktrees = [], busy = 
       // All of these confirm on their own; the caller takes it from here, and
       // both destructive ones ask again before anything is actually removed.
       const buttons = el('div', 'dlg-buttons');
+      const paths = el('button', 'btn', 'Sandbox paths…');
+      paths.addEventListener('click', () => { action = 'sandbox-paths'; submit(); });
+      buttons.appendChild(paths);
 
       // An archived project takes a 409 for either of these, so they are hidden
       // rather than offered and refused — the same rule the worktree button

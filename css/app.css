@@ -1248,6 +1248,19 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.55); }
 .dlg-note { font-size: 12.5px; color: var(--muted); }
 .dlg-note.warn { color: var(--danger); }
 
+.sandbox-path-row, .sandbox-inherited {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 10px;
+  margin-bottom: 8px;
+  overflow-wrap: anywhere;
+}
+
+.sandbox-path-row > .btn, .sandbox-inherited > .btn { align-self: flex-start; }
+
 /* What a path field will actually send, when the field does not already spell
  * it — a relative path, a `..`, a trailing slash. Shown because the value we
  * compare against `GET /worktrees` later is this one, not what was typed. */

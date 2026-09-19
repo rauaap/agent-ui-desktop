@@ -51,6 +51,14 @@ headers, so this only works if you add them — the supported path is `WEB_ROOT`
   action lives there — new session, new worktree, removing a worktree, and
   forgetting the project, which removes it, its sessions and its worktrees but
   **never touches the project's own directory**.
+- **Sandbox paths** — Settings → Server sandbox paths edits server defaults;
+  Project settings → Sandbox paths adds project entries or overrides inherited
+  permissions. Server defaults use `GET`/`PATCH /sandbox-paths`; project entries
+  use `PATCH /projects`. Add files/directories with optional “Allow writes”, then
+  save the whole list. Paths expand on the server, not in the browser. Clearing project
+  entries restores inheritance. Changes affect future sandboxed turns only;
+  running agents retain their access. Read-only mounts can expose credentials,
+  and writable mounts permit changing or deleting host data.
 - **Agent picker** — the new-session dialog offers the agents `GET /agents`
   says this server can run. Settings lets this browser remember which one to
   preselect; without that preference, the server’s default is used. Nothing is

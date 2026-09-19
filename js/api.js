@@ -91,6 +91,14 @@ export const listAgents = () => request('GET', '/agents').then(normalizeAgents);
 /* projects                                                           */
 /* ------------------------------------------------------------------ */
 
+export const getSandboxPaths = () => request('GET', '/sandbox-paths');
+
+export const setSandboxPaths = (sandbox_paths) =>
+  request('PATCH', '/sandbox-paths', { sandbox_paths });
+
+export const setProjectSandboxPaths = (path, sandbox_paths) =>
+  request('PATCH', '/projects', { path, sandbox_paths }).then(asProject);
+
 export const listProjects = () => request('GET', '/projects').then(each(asProject));
 
 export const createProject = (path, name) =>

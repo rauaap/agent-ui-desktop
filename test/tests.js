@@ -39,6 +39,8 @@ import {
   slug,
 } from '../js/worktree.js';
 
+import { sandboxPathEntries, isExactOverride } from '../js/sandbox-paths.js';
+
 const results = [];
 
 function test(name, fn) {
@@ -49,6 +51,29 @@ function test(name, fn) {
     results.push({ name, ok: false, message: error.message });
   }
 }
+
+test('sandbox paths preserve server expressions, spaces and permissions', () => {
+  const paths = ['~user/config', '$HOME/tool data', '${HOME}/config', '/path with spaces', '/trailing '];
+  const result = sandboxPathEntries(paths.map((path, i) => ({ path, write: i === 1 })));
+  assertEqual(JSON.stringify(result), JSON.stringify(paths.map((path, i) => ({ path, write: i === 1 }))));
+  assertEqual(sandboxPathEntries([{ path: '~/config' }])[0].write, false);
+});
+
+test('sandbox paths clear a whole scope and reject blank draft rows', () => {
+  assertEqual(JSON.stringify(sandboxPathEntries([])), '[]');
+  let rejected = false;
+  try { sandboxPathEntries([{ path: '  ' }]); } catch { rejected = true; }
+  assertEqual(rejected, true);
+});
+
+test('sandbox override labels compare raw paths, never guess server expansion', () => {
+  const defaults = [{ path: '~/config', write: true }];
+  assertEqual(isExactOverride('~/config', defaults), true);
+  assertEqual(isExactOverride('$HOME/config', defaults), false);
+  assertEqual(isExactOverride('~/config/nested', defaults), false);
+  assertEqual(sandboxPathEntries([{ path: '~/config' }])[0].write, false);
+  assertEqual(defaults[0].write, true);
+});
 
 function assertEqual(actual, expected, note) {
   if (actual !== expected) {

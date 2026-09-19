@@ -17,6 +17,7 @@ import { Workspace } from './workspace.js';
 import { Notifier } from './notify.js';
 import {
   appSettingsDialog,
+  sandboxPathsDialog,
   confirmDialog,
   createWorktreeDialog,
   forgetProjectDialog,
@@ -334,10 +335,8 @@ async function createProject() {
 }
 
 /**
- * Project settings. The dialog itself changes nothing about the project beyond
- * archiving it — the server has no other route that updates one — so it reports
- * what `GET /projects` says, lists the project's worktrees, and hands back
- * whichever action was chosen, all of which already live here.
+ * Project settings reports project facts and worktrees, and hands back the
+ * chosen action, including opening the sandbox-path editor.
  *
  * A loop rather than one shot, because managing worktrees is the one thing here
  * you do more than once: removing one drops you back into the list, refreshed.
@@ -391,7 +390,8 @@ async function openProjectSettings(project) {
       await setProjectArchived(current, archiving);
       return;
     }
-    if (result?.action === 'worktree-new') await createWorktreeFor(current, '');
+    if (result?.action === 'sandbox-paths') await openSandboxPaths(current);
+    else if (result?.action === 'worktree-new') await createWorktreeFor(current, '');
     else if (result?.action === 'worktree-delete') await removeWorktree(result.worktree);
     else return;
     // Both actions refreshed; re-resolve so the reopened dialog shows the
@@ -886,6 +886,33 @@ async function openAppSettings() {
   if (!result) return;
   setWorktreeTemplate(result.template);
   if (result.agent !== undefined) setAgentPreference(result.agent);
+  if (result.action === 'sandbox-paths') await openSandboxPaths();
+}
+
+async function openSandboxPaths(project = null) {
+  try {
+    // Fetch both scopes afresh; never substitute an empty list for a failed load.
+    const [settings, latest] = await Promise.all([
+      api.getSandboxPaths(),
+      project ? api.listProjects() : Promise.resolve(null),
+    ]);
+    const current = project ? latest.find((p) => p.id === project.id) : null;
+    if (project && !current) throw new Error('The project no longer exists');
+    const saved = await sandboxPathsDialog(
+      current ? current.sandbox_paths ?? [] : settings.sandbox_paths ?? [],
+      current ? settings.sandbox_paths ?? [] : [],
+      (paths) => current
+        ? api.setProjectSandboxPaths(current.path, paths)
+        : api.setSandboxPaths(paths),
+      current ? current.name || current.path : null,
+    );
+    if (saved) {
+      toast('Sandbox paths saved for future turns');
+      if (current) await refresh();
+    }
+  } catch (error) {
+    fail(error);
+  }
 }
 
 // Collapsing the sidebar gives the transcript the full window, for reading a
