@@ -26,6 +26,7 @@ import {
   noticeDialog,
   projectSettingsDialog,
   sessionSettingsDialog,
+  usageDialog,
   setWorktreeTemplate,
   worktreeTemplate,
 } from './dialogs.js';
@@ -871,6 +872,11 @@ async function deleteSessions(sessions) {
 
 document.getElementById('new-project-btn').addEventListener('click', createProject);
 document.getElementById('refresh-btn').addEventListener('click', () => refresh());
+
+// The panel owns its own polling for as long as it is open — a read hits both
+// providers upstream and takes about a second, so it is not folded into the
+// catalog refresh that runs every three seconds.
+document.getElementById('usage-btn').addEventListener('click', () => usageDialog(api.getUsage));
 
 /**
  * Client settings. The preferred agent and worktree path template live in this

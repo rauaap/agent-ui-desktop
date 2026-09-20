@@ -88,6 +88,21 @@ function detail(text, status) {
 export const listAgents = () => request('GET', '/agents').then(normalizeAgents);
 
 /* ------------------------------------------------------------------ */
+/* usage                                                              */
+/* ------------------------------------------------------------------ */
+
+/**
+ * How much of each subscription's five-hour and weekly quota is spent, as
+ * `{claude_code, codex}` — plans, not agents; see `js/usage.js`.
+ *
+ * Every call queries both upstream providers live, with no server-side cache,
+ * so it takes roughly 0.5–1s and belongs on a minute-scale poll or a user
+ * action. A plan that cannot be read reports a reason of its own instead of
+ * failing the request, so this rejecting means the *server* is unreachable.
+ */
+export const getUsage = () => request('GET', '/usage');
+
+/* ------------------------------------------------------------------ */
 /* projects                                                           */
 /* ------------------------------------------------------------------ */
 

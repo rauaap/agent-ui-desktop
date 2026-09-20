@@ -7,6 +7,15 @@
 
 import { preferredAgent } from './agents.js';
 import { sandboxPathEntries, isExactOverride } from './sandbox-paths.js';
+import {
+  formatPercent,
+  hasReading,
+  mergeUsage,
+  normalizeUsage,
+  remainingSeconds,
+  resetLabel,
+  usageLevel,
+} from './usage.js';
 import { filedLabel, isArchived, partition } from './archive.js';
 import { suggestName } from './names.js';
 import { isBusy } from './store.js';
@@ -700,6 +709,242 @@ export function forgetProjectDialog(project, sessionCount, worktreeCount = 0, ar
         body.appendChild(el('div', 'dlg-note',
           'This project’s directory is already gone from the server.'));
       }
+    },
+    collect: () => true,
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/* usage                                                              */
+/* ------------------------------------------------------------------ */
+
+/** How often the panel re-reads, and how often it re-renders its countdowns. */
+const USAGE_POLL_MS = 60_000;
+const USAGE_TICK_MS = 30_000;
+
+/** What each failure reason means for the plan, and what to do about it. */
+const USAGE_TROUBLE = {
+  unconfigured: {
+    badge: 'Not set up',
+    tone: 'mute',
+    note: 'No credentials for this plan on the server, so it has no quota to report. '
+      + 'Authenticate it there to see usage here.',
+  },
+  reauth: {
+    badge: 'Sign in again',
+    tone: 'bad',
+    note: 'The stored token was rejected. The server does not refresh tokens — '
+      + 're-authenticate this plan on the server.',
+  },
+  upstream: {
+    badge: 'Unavailable',
+    tone: 'warn',
+    note: 'The provider rejected the request. This is usually transient; the next read retries.',
+  },
+  unreachable: {
+    badge: 'Unavailable',
+    tone: 'warn',
+    note: 'The server could not reach the provider within its timeout. This is usually '
+      + 'transient; the next read retries.',
+  },
+  unreadable: {
+    badge: 'Unreadable',
+    tone: 'warn',
+    note: 'The provider answered in a shape the server did not recognise. Usage is unavailable '
+      + 'until that is fixed, and it is worth reporting.',
+  },
+  unknown: {
+    badge: 'Unavailable',
+    tone: 'warn',
+    note: 'The server reported a reason this client does not recognise.',
+  },
+};
+
+/**
+ * One window's meter: the share spent, as a bar whose fill carries severity.
+ *
+ * `used_percent` is what has been *consumed*, so the bar fills as the quota
+ * runs out — which is why the track is the same hue a step down rather than a
+ * neutral gray: the state reads across the whole bar either way.
+ */
+function usageMeter(plan, window, now) {
+  const row = el('div', 'usage-window');
+
+  const head = el('div', 'uw-head');
+  head.appendChild(el('span', 'uw-name', window.name));
+  head.appendChild(el('span', 'uw-pct', formatPercent(window.percent)));
+  row.appendChild(head);
+
+  const level = usageLevel(window.percent);
+  const track = el('div', `usage-track level-${level}${window.stale ? ' stale' : ''}`);
+  if (window.percent === null) {
+    // An empty track with no value is not an indeterminate progressbar, it is
+    // decoration: the line under it is what says there was no reading.
+    track.setAttribute('aria-hidden', 'true');
+  } else {
+    // The label has to name the plan — several of these rows say "Weekly", and
+    // only the heading above them says whose.
+    track.setAttribute('role', 'progressbar');
+    track.setAttribute('aria-label', `${plan.name} ${window.name.toLowerCase()} quota used`);
+    track.setAttribute('aria-valuemin', '0');
+    track.setAttribute('aria-valuemax', '100');
+    track.setAttribute('aria-valuenow', String(window.percent));
+  }
+  const fill = el('div', 'usage-fill');
+  fill.style.width = `${window.percent ?? 0}%`;
+  track.appendChild(fill);
+  row.appendChild(track);
+
+  const reset = el('div', 'uw-reset', window.percent === null
+    ? 'No reading for this window'
+    : resetLabel(window, now));
+  // The countdown is coarse; the exact moment belongs in the tooltip, where a
+  // date read in the viewer's own zone cannot be mistaken for the label.
+  if (window.resetAt !== null && !window.stale) {
+    const exact = new Date(window.resetAt * 1000).toLocaleString();
+    reset.title = window.rolling
+      ? `${exact} — this window is rolling, so it moves until the first request of the window`
+      : exact;
+  }
+  const left = remainingSeconds(window, now);
+  if (left !== null && left <= 0) reset.classList.add('due');
+  row.appendChild(reset);
+  return row;
+}
+
+/** One plan: its meters, or the reason there are none. */
+function usagePlan(plan, now) {
+  const card = el('div', 'usage-plan');
+
+  const head = el('div', 'usage-plan-head');
+  head.appendChild(el('span', 'usage-plan-name', plan.name));
+  const trouble = plan.kind ? USAGE_TROUBLE[plan.kind] : null;
+  if (plan.stale) head.appendChild(el('span', 'pill warn', 'Last known'));
+  else if (trouble) head.appendChild(el('span', `pill ${trouble.tone}`, trouble.badge));
+  card.appendChild(head);
+
+  if (hasReading(plan) || !trouble) {
+    for (const window of plan.windows) card.appendChild(usageMeter(plan, window, now));
+    if (!plan.windows.length) card.appendChild(el('div', 'dlg-note', 'No windows reported.'));
+  }
+
+  // Shown even beside live meters: a plan can report one window and fail the
+  // other, and the reason is the only thing that explains the gap.
+  if (trouble) {
+    card.appendChild(el('div', `dlg-note${trouble.tone === 'bad' ? ' warn' : ''}`, trouble.note));
+    card.appendChild(el('div', 'usage-reason', plan.error));
+  }
+  return card;
+}
+
+/**
+ * Subscription usage: what each plan's five-hour and weekly quota has spent.
+ *
+ * A panel rather than a line in settings, because it is four live numbers that
+ * go stale while you look at them: it re-reads on a minute-scale poll for as
+ * long as it is open, and stops the moment it closes. Every read queries both
+ * providers upstream with no cache behind it, so it is not polled faster than
+ * that and never per frame.
+ *
+ * Plans are read independently. One that is unauthenticated or unreachable
+ * says so in its own card while the other keeps reporting numbers — the whole
+ * point of the endpoint reporting a reason per plan rather than failing.
+ *
+ * @param {() => Promise<object>} load performs `GET /usage`
+ */
+export function usageDialog(load) {
+  let plans = [];
+  let readAt = null;
+  /** The request itself failing — an unreachable *server*, not an unread plan. */
+  let failure = null;
+  let loaded = false;
+  let inFlight = false;
+  let closed = false;
+  let list;
+  let status;
+  let reload;
+  const timers = [];
+
+  const paint = () => {
+    if (closed) return;
+    const now = Date.now() / 1000;
+    list.replaceChildren();
+    if (!loaded) {
+      list.appendChild(el('div', 'dlg-note', 'Reading…'));
+    } else if (failure && !plans.length) {
+      list.appendChild(el('div', 'dlg-note warn', failure.message));
+    } else if (!plans.length) {
+      list.appendChild(el('div', 'dlg-note', 'The server reported no subscriptions.'));
+    } else {
+      for (const plan of plans) list.appendChild(usagePlan(plan, now));
+    }
+
+    const bits = [];
+    if (inFlight) bits.push('Reading…');
+    else if (readAt) bits.push(`Read at ${new Date(readAt * 1000).toLocaleTimeString()}`);
+    if (loaded) bits.push('re-read every minute while this is open');
+    // A failed read over numbers that are still on screen: say so here rather
+    // than replacing the panel with the error.
+    if (failure && plans.length) bits.push(failure.message);
+    status.className = failure && plans.length ? 'dlg-note warn' : 'dlg-note';
+    status.textContent = bits.join(' · ');
+  };
+
+  const read = async () => {
+    if (inFlight || closed) return;
+    inFlight = true;
+    reload.disabled = true;
+    paint();
+    try {
+      const payload = await load();
+      // Normalized against the moment of the read, because a rolling reset is
+      // only meaningful relative to when it was fetched.
+      plans = mergeUsage(plans, normalizeUsage(payload));
+      readAt = Date.now() / 1000;
+      failure = null;
+    } catch (error) {
+      failure = error instanceof Error ? error : new Error(String(error));
+    } finally {
+      loaded = true;
+      inFlight = false;
+      if (!closed) reload.disabled = false;
+      paint();
+    }
+  };
+
+  return show({
+    title: 'Subscription usage',
+    confirm: 'Close',
+    dismissOnly: true,
+    onClose: () => {
+      closed = true;
+      for (const timer of timers) clearInterval(timer);
+    },
+    body: (body) => {
+      body.appendChild(el('div', 'dlg-note',
+        'The share of each plan’s quota already spent. These are subscriptions, not agents: '
+        + 'one plan can back several harnesses, so a session’s agent does not decide which '
+        + 'quota its turns draw from.'));
+
+      list = el('div', 'usage-list');
+      body.appendChild(list);
+
+      status = el('div', 'dlg-note');
+      body.appendChild(status);
+
+      reload = el('button', 'btn small', 'Read again');
+      reload.addEventListener('click', (event) => {
+        event.preventDefault();
+        read();
+      });
+      body.appendChild(reload);
+
+      paint();
+      read();
+      timers.push(setInterval(read, USAGE_POLL_MS));
+      // Countdowns are drawn from values already in hand, so they can be
+      // refreshed between reads without touching the server.
+      timers.push(setInterval(paint, USAGE_TICK_MS));
     },
     collect: () => true,
   });

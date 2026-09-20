@@ -106,6 +106,12 @@ headers, so this only works if you add them — the supported path is `WEB_ROOT`
   device and arrives live over the WebSocket.
 - **Search and export** — filter and highlight within a transcript, or export
   the whole session as markdown.
+- **Subscription usage** — the **U** in the sidebar header opens a panel of
+  meters: how much of each plan's five-hour and weekly quota is already spent,
+  with when each window resets. It re-reads every minute for as long as it is
+  open and stops when it closes. Plans are read independently, so one that is
+  unauthenticated or unreachable says so in its own card while the other keeps
+  reporting numbers.
 
 ## Layout
 
@@ -124,6 +130,7 @@ js/
   message-history.js  prompt/command recall and draft restoration — no DOM
   store.js            selected-session state and transcript reducer — no DOM
   session-settings.js settings reconciliation and sandbox save guards — no DOM
+  usage.js            subscription quotas: plans, windows, staleness — no DOM
   tools.js            canonical action validation, labels, and summaries
   sidebar.js          the project/session tree, and the archive below it
   archive.js          reading `archived_at`: split, order, label — no DOM
@@ -349,6 +356,40 @@ With no list at all — an unreachable server, or one too old for the endpoint �
 the field disappears and the create request omits `agent`, which leaves the
 choice exactly where it was: with the server's default. That is deliberately not
 a hardcoded fallback list, because a hardcoded list is the thing this replaced.
+
+### A subscription is not an agent
+
+`GET /usage` reports `claude_code` and `codex`. Those look like agent ids and
+are not: `GET /agents` offers `claude-code` and `pi`, and the two sets are
+deliberately spelled differently because one subscription can back several
+harnesses. Nothing in `usage.js` maps a plan onto an adapter, and the panel
+never claims a session's agent decides which quota its turns draw from — the
+cards are labelled by plan, which is the only thing the endpoint actually says.
+
+Both keys are always present and each carries its own `error`, so a plan that
+is unauthenticated or unreachable reports a reason instead of failing the
+request. Reading the response as a whole would throw away the half that worked,
+so every plan is read on its own and a card either draws meters or explains why
+it cannot. The reasons are a small documented vocabulary, and only two of them
+— an upstream rejection and a timeout — mean "the plan is fine, this read was
+not": those keep the last good numbers, dimmed and dated. An expired token or a
+response the server could not parse are states of the plan, and showing a
+minute-old percentage under either would be a lie.
+
+The countdowns are the other trap. Weekly is a fixed window on both plans, and
+Claude Code's five-hour window is fixed wall-clock, so those tick down locally
+between reads. Codex's five-hour window is *rolling*: before the first request
+of a window its reset is simply five hours from now, and `reset_at` moves on
+every poll. Counting down from that locally would show a deadline that does not
+exist, so a rolling window's remaining time is measured from the moment it was
+read, rendered as "about", and left alone until the next read replaces it. A
+null `reset_at` on an otherwise good read is normal and means no countdown — it
+is never rendered as an epoch date.
+
+Every read queries both providers live with no cache behind it and takes about
+a second, so it is not folded into the three-second session poll. The panel owns
+its own minute-scale timer while it is open, and a second, cheaper timer
+re-renders the countdowns from values already in hand.
 
 ### An id is a number on the wire and a string here
 

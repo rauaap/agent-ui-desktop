@@ -585,6 +585,9 @@ body.sidebar-resizing * { cursor: col-resize !important; user-select: none !impo
   color: var(--muted);
 }
 
+/* A letter among glyphs, so it needs the weight to carry the same visual size. */
+.icon-btn.usage-btn { font-weight: 700; }
+
 .icon-btn:hover { background: var(--panel-hover); color: var(--ink); }
 .icon-btn.danger:hover { background: var(--danger-soft); color: var(--danger); }
 
@@ -1423,6 +1426,109 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.55); }
   background: var(--danger-soft);
   color: var(--danger);
   font-size: 12.5px;
+}
+
+/* ------------------------------------------------------------------ */
+/* subscription usage                                                 */
+/* ------------------------------------------------------------------ */
+
+/* Meters, not charts: each one is a single ratio against a limit, which is the
+ * one shape a bar reads better than anything else. */
+
+.usage-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.usage-plan {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+
+.usage-plan-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.usage-plan-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+/* Two more pill states than the session list needs: a plan that is simply not
+ * configured is not a fault, and a transient read failure is not danger. */
+.pill.warn { color: var(--awaiting); border-color: rgba(232, 177, 76, 0.4); }
+.pill.bad { color: var(--danger); border-color: var(--danger-line); background: var(--danger-soft); }
+.pill.mute { color: var(--faint); }
+
+.usage-window { display: flex; flex-direction: column; gap: 5px; }
+
+.uw-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 12.5px;
+}
+
+.uw-name { flex: 1; min-width: 0; color: var(--muted); }
+
+/* A column of percentages down the panel, so they line up: this is exactly the
+ * case tabular figures are for. The value stays in ink — the bar beside it
+ * carries the severity, and colouring the number too would say it twice. */
+.uw-pct {
+  flex: none;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The track is the fill's own hue a step down rather than a neutral gray, so
+ * the state reads across the whole bar and not just its filled part. */
+.usage-track {
+  position: relative;
+  height: 8px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--accent-soft);
+}
+
+.usage-fill {
+  height: 100%;
+  border-radius: 4px;
+  background: var(--accent);
+  transition: width 0.25s ease;
+}
+
+.usage-track.level-high { background: var(--awaiting-soft); }
+.usage-track.level-high .usage-fill { background: var(--awaiting); }
+.usage-track.level-critical { background: var(--danger-soft); }
+.usage-track.level-critical .usage-fill { background: var(--danger); }
+
+/* No reading: an empty track, drawn in the neutral line colour so it cannot be
+ * mistaken for a quota that happens to be untouched. */
+.usage-track.level-unknown { background: var(--line); }
+
+/* Numbers from a read that has since failed. Dimmed rather than hidden — they
+ * were true a minute ago, and the line under them says when. */
+.usage-track.stale { opacity: 0.5; }
+
+.uw-reset { font-size: 11.5px; color: var(--faint); }
+.uw-reset.due { color: var(--awaiting); }
+
+/* The server's own words for why a plan could not be read. */
+.usage-reason {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--faint);
+  overflow-wrap: anywhere;
 }
 
 /* ------------------------------------------------------------------ */
