@@ -26,6 +26,14 @@ WEB_ROOT=../agent-ui-desktop uv run main.py
 Then open the server's address (e.g. `http://10.0.0.1:8000`). Under Compose the
 bind mount and `WEB_ROOT` are already wired in `compose.yaml`.
 
+On first run, enter the server's shared token (from
+`~/.config/agent-ui-server/token`). Change it under **Settings → Server token**.
+Saving validates it with `GET /agents`; only an unreachable server offers
+**Save anyway**. Saving reloads the client to restart all connections. The token
+is stored separately in `localStorage` as `agentUi.serverToken`, per origin:
+IP and hostname URLs need separate setup. A rejected token pauses requests and
+reconnections until it is replaced. Never include this storage key in exports.
+
 Install it as a PWA (Chrome: ⋮ → Cast, save and share → Install page as app) and
 it gets its own window, icon, and working notifications — closer to an app than
 a tab, without shipping a browser.
@@ -33,9 +41,12 @@ a tab, without shipping a browser.
 <details>
 <summary>Opening it without the backend serving it</summary>
 
-Pass `?api=` to point at a backend on another origin, e.g.
-`http://localhost:8080/?api=http://10.0.0.1:8000`. The server sends no CORS
-headers, so this only works if you add them — the supported path is `WEB_ROOT`.
+`?api=` is ignored on HTTP(S) pages to prevent credential exfiltration.
+Only pages opened from disk (`file:`) honour it. Disk development also requires
+an explicitly tailored development CSP allowing the backend's HTTP and WebSocket
+origins, browser module support, and server CORS/Origin configuration. The shipped
+CSP intentionally allows only same-origin connections; the supported path is
+`WEB_ROOT`, or a same-origin development proxy for both REST and WebSockets.
 </details>
 
 ## Features

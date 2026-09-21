@@ -9,7 +9,7 @@
  * Ported from SessionActivity.java:90-96 and commitReplay().
  */
 
-import { wsBase } from './api.js';
+import { authenticatedSocket, authBlocked } from './auth.js';
 import { approvalResponsePayload } from './tools.js';
 
 const BASE_DELAY = 1000;
@@ -43,12 +43,12 @@ export class SessionSocket {
   }
 
   open() {
-    if (this.closed) return;
+    if (this.closed || authBlocked()) return;
     this.clearTimer();
 
     let socket;
     try {
-      socket = new WebSocket(`${wsBase}/ws/sessions/${this.id}`);
+      socket = authenticatedSocket(`/ws/sessions/${this.id}`);
     } catch {
       this.scheduleReconnect();
       return;
@@ -92,11 +92,12 @@ export class SessionSocket {
       if (!this.replayPending || event.type === 'settings') this.onLiveEvent?.(event);
     };
 
-    socket.onclose = () => {
+    socket.onclose = async () => {
       if (this.socket !== socket) return;
       this.socket = null;
       this.finishReplay();
       this.store.setConnected(this.id, false);
+      await socket.authCheck;
       this.scheduleReconnect();
     };
 
@@ -160,7 +161,7 @@ export class SessionSocket {
   }
 
   scheduleReconnect() {
-    if (this.closed || this.timer) return;
+    if (this.closed || this.timer || authBlocked()) return;
     const delay = Math.min(BASE_DELAY * 2 ** this.attempt, MAX_DELAY);
     this.attempt += 1;
     this.timer = setTimeout(() => {

@@ -725,6 +725,20 @@ body.sidebar-resizing * { cursor: col-resize !important; user-select: none !impo
   overflow-x: auto;
 }
 .md pre code { background: none; padding: 0; font-size: 12.5px; }
+.token-dialog {
+  width: min(460px, calc(100vw - 40px));
+  padding: 24px;
+  color: var(--ink);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+.token-dialog::backdrop { background: rgb(0 0 0 / 65%); }
+.token-dialog form { display: flex; flex-wrap: wrap; gap: 12px; }
+.token-dialog h2, .token-dialog p, .token-dialog label { width: 100%; margin: 0; }
+.token-dialog input { display: block; width: 100%; margin-top: 8px; }
+.token-dialog button { padding: 6px 12px; }
+
 .md-table { margin: 0 0 0.7em; overflow-x: auto; }
 .md-table:last-child { margin-bottom: 0; }
 .md table { border-collapse: collapse; }

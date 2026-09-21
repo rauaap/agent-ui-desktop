@@ -8,6 +8,7 @@
  */
 
 import * as api from './api.js';
+import { authBlocked, showTokenPrompt } from './auth.js';
 import { agentPreference, setAgentPreference } from './agents.js';
 import { partition } from './archive.js';
 import { Store, isBusy } from './store.js';
@@ -247,6 +248,7 @@ async function patchSettings(request) {
 }
 
 async function refresh() {
+  if (authBlocked()) return;
   const connection = connectionSnapshot();
   const since = settingsSync.checkpoint();
   const requestId = ++catalogRequest;
@@ -287,6 +289,7 @@ let pollInFlight = false;
 
 /** Refresh the session catalog without repeating the heavier project metadata loads. */
 async function pollSessions() {
+  if (authBlocked()) return;
   if (pollInFlight || document.visibilityState === 'hidden') return;
   pollInFlight = true;
   try {
@@ -893,6 +896,7 @@ async function openAppSettings() {
   setWorktreeTemplate(result.template);
   if (result.agent !== undefined) setAgentPreference(result.agent);
   if (result.action === 'sandbox-paths') await openSandboxPaths();
+  if (result.action === 'server-token') showTokenPrompt(false, true);
 }
 
 async function openSandboxPaths(project = null) {
@@ -1094,6 +1098,7 @@ sidebarHead.insertBefore(settingsButton, newProjectButton);
 /* ------------------------------------------------------------------ */
 
 (async () => {
+  if (authBlocked()) { showTokenPrompt(); return; }
   await refresh();
   setInterval(pollSessions, POLL_INTERVAL_MS);
 })();

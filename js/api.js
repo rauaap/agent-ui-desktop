@@ -13,15 +13,8 @@
 import { normalizeAgents } from './agents.js';
 import { asProject, asSession, asWorktree, each, wireId } from './ids.js';
 
-const override = new URLSearchParams(location.search).get('api');
-
-/** Base for REST calls, e.g. "http://10.0.0.1:8000". */
-export const httpBase = override
-  ? override.replace(/\/+$/, '')
-  : location.origin;
-
-/** Base for WebSocket calls, e.g. "ws://10.0.0.1:8000". */
-export const wsBase = httpBase.replace(/^http/, 'ws');
+import { requireToken, tokenFetch, rejectToken } from './auth.js';
+export { httpBase, wsBase } from './auth.js';
 
 /** An HTTP error carrying the status, so callers can branch on it. */
 export class ApiError extends Error {
@@ -33,9 +26,10 @@ export class ApiError extends Error {
 }
 
 async function request(method, path, body) {
+  const token = requireToken();
   let response;
   try {
-    response = await fetch(httpBase + path, {
+    response = await tokenFetch(path, token, {
       method,
       headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
       body: body === undefined ? undefined : JSON.stringify(body),
@@ -46,6 +40,10 @@ async function request(method, path, body) {
     throw new ApiError(0, 'Cannot reach the server');
   }
 
+  if (response.status === 401) {
+    rejectToken(token);
+    throw new ApiError(401, 'The server rejected the token.');
+  }
   const text = await response.text();
   if (!response.ok) throw new ApiError(response.status, detail(text, response.status));
   if (!text) return null;

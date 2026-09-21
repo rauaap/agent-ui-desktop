@@ -273,6 +273,9 @@ export function appSettingsDialog(template, sampleProject, agents = [], agent = 
     title: 'Settings',
     confirm: 'Save',
     body: (body, submit) => {
+      const token = el('button', 'btn', 'Server token…');
+      token.addEventListener('click', () => { action = 'server-token'; submit(); });
+      body.appendChild(token);
       const paths = el('button', 'btn', 'Server sandbox paths…');
       paths.addEventListener('click', () => { action = 'sandbox-paths'; submit(); });
       body.appendChild(paths);

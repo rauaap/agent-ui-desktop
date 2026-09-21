@@ -6,7 +6,7 @@
  * recovered by reconnecting for another authoritative snapshot.
  */
 
-import { wsBase } from './api.js';
+import { authenticatedSocket, authBlocked } from './auth.js';
 import { FileTreeCache } from './file-tree-cache.js';
 
 const BASE_DELAY = 1000;
@@ -29,7 +29,7 @@ export class FileTreeSocket {
   }
 
   open(explicitRetry = false) {
-    if (this.closed || this.socket) return;
+    if (this.closed || this.socket || authBlocked()) return;
     if (this.timer) {
       if (!explicitRetry) return;
       clearTimeout(this.timer);
@@ -42,7 +42,7 @@ export class FileTreeSocket {
     this.changed();
     let socket;
     try {
-      socket = new WebSocket(`${wsBase}/ws/sessions/${this.id}/files`);
+      socket = authenticatedSocket(`/ws/sessions/${this.id}/files`);
     } catch {
       this.cache.unavailable('File completion could not connect.');
       this.changed();
@@ -85,13 +85,14 @@ export class FileTreeSocket {
       this.changed();
     };
 
-    socket.onclose = () => {
+    socket.onclose = async () => {
       if (this.socket !== socket) return;
       this.socket = null;
       // Even a formerly ready cache is stale as soon as transport ordering is
       // lost. Preserve an application error's useful message, but no paths.
       if (!this.applicationError) this.cache.unavailable('File completion disconnected.');
       this.changed();
+      await socket.authCheck;
       if (!this.applicationError) this.scheduleReconnect();
     };
 
@@ -108,7 +109,7 @@ export class FileTreeSocket {
   }
 
   scheduleReconnect() {
-    if (this.closed || this.timer || this.applicationError) return;
+    if (this.closed || this.timer || this.applicationError || authBlocked()) return;
     const delay = Math.min(BASE_DELAY * 2 ** this.attempt, MAX_DELAY);
     this.attempt += 1;
     this.timer = setTimeout(() => {

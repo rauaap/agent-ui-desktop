@@ -190,8 +190,13 @@ await test('sandbox: stale-idle 409 retains confirmation, surfaces explanation, 
 // runner; browser tests retain their real origin. All network traffic is mocked.
 const suppliedLocation = typeof globalThis.location === 'undefined';
 if (suppliedLocation) globalThis.location = { search: '', origin: 'http://localhost' };
+const storageDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+Object.defineProperty(globalThis, 'localStorage', { configurable: true,
+  value: { getItem: () => 'test-only-token-not-a-real-secret' } });
 const api = await import('../js/api.js');
 const { SessionSocket } = await import('../js/socket.js');
+if (storageDescriptor) Object.defineProperty(globalThis, 'localStorage', storageDescriptor);
+else delete globalThis.localStorage;
 if (suppliedLocation) delete globalThis.location;
 
 await test('sandbox API: creation preserves false and numeric worktree ids; PATCHes stay narrow', async () => {
@@ -277,6 +282,7 @@ await test('sandbox socket: reconnect requests REST even without settings; pendi
   class FakeSocket {
     static OPEN = 1;
     constructor() { this.readyState = 1; this.sent = []; sockets.push(this); }
+    addEventListener() {}
     send(text) { this.sent.push(JSON.parse(text)); }
     close() {}
   }
