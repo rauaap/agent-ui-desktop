@@ -275,6 +275,76 @@ test('md: blank line separates paragraphs', () => {
   assertEqual(toHtml('a\n\nb'), '<p>a</p><p>b</p>');
 });
 
+const table = (head, body) =>
+  `<div class="md-table"><table><thead>${head}</thead>${body ? `<tbody>${body}</tbody>` : ''}</table></div>`;
+
+test('md: pipe table with header and body', () => {
+  assertEqual(
+    toHtml('| a | b |\n|---|---|\n| 1 | **2** |'),
+    table('<tr><th>a</th><th>b</th></tr>', '<tr><td>1</td><td><strong>2</strong></td></tr>'),
+  );
+});
+
+test('md: table outer pipes are optional', () => {
+  assertEqual(
+    toHtml('a | b\n--- | ---\n1 | 2'),
+    table('<tr><th>a</th><th>b</th></tr>', '<tr><td>1</td><td>2</td></tr>'),
+  );
+});
+
+test('md: table delimiter colons set alignment', () => {
+  assertEqual(
+    toHtml('| a | b | c | d |\n| :-- | :-: | --: | --- |'),
+    table('<tr><th class="align-left">a</th><th class="align-center">b</th>'
+      + '<th class="align-right">c</th><th>d</th></tr>'),
+  );
+});
+
+test('md: escaped pipes and pipes in code do not split cells', () => {
+  assertEqual(
+    toHtml('| op | note |\n|---|---|\n| `a || b` | x \\| y |\n| `c \\| d` | z |'),
+    table(
+      '<tr><th>op</th><th>note</th></tr>',
+      '<tr><td><code>a || b</code></td><td>x | y</td></tr>'
+        + '<tr><td><code>c | d</code></td><td>z</td></tr>',
+    ),
+  );
+});
+
+test('md: ragged table rows are padded and truncated to the header', () => {
+  assertEqual(
+    toHtml('| a | b |\n|---|---|\n| 1 |\n| 1 | 2 | 3 |\n| | 2 |'),
+    table(
+      '<tr><th>a</th><th>b</th></tr>',
+      '<tr><td>1</td><td></td></tr><tr><td>1</td><td>2</td></tr><tr><td></td><td>2</td></tr>',
+    ),
+  );
+});
+
+test('md: table needs a matching delimiter row', () => {
+  assertEqual(toHtml('| a | b |\n| 1 | 2 |'), '<p>| a | b |<br>| 1 | 2 |</p>');
+  assertEqual(toHtml('| a | b |\n|---|'), '<p>| a | b |<br>|---|</p>');
+  assertEqual(toHtml('a | b'), '<p>a | b</p>');
+});
+
+test('md: table ends a paragraph and ends at a blank or pipeless line', () => {
+  assertEqual(
+    toHtml('intro\n| a |\n|---|\n| 1 |\nafter'),
+    '<p>intro</p>' + table('<tr><th>a</th></tr>', '<tr><td>1</td></tr>') + '<p>after</p>',
+  );
+  assertEqual(
+    toHtml('| a |\n|---|\n\n| 1 |'),
+    table('<tr><th>a</th></tr>') + '<p>| 1 |</p>',
+  );
+});
+
+test('md: table cells are escaped', () => {
+  assertEqual(
+    toHtml('| <b> |\n|---|'),
+    table('<tr><th>&lt;b&gt;</th></tr>'),
+  );
+});
+
 /* ------------------------------------------------------------------ */
 /* canonical actions                                                  */
 /* ------------------------------------------------------------------ */

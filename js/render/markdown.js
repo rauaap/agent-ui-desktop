@@ -1,7 +1,7 @@
 /**
  * A deliberately small Markdown subset for agent messages: headings, bold,
- * italic, strikethrough, inline code, fenced code blocks, bullet/numbered lists
- * and links. Same subset and same rules as the Android client's Markdown.java.
+ * italic, strikethrough, inline code, fenced code blocks, bullet/numbered lists,
+ * pipe tables and links. Same subset and same rules as the Android client's Markdown.java.
  *
  * That class flattens to text-plus-spans because Android needs a Spannable;
  * here we emit HTML instead, so lists and code blocks become real `<ul>` and
@@ -120,6 +120,29 @@ export function toHtml(md) {
       continue;
     }
 
+    // table: a piped header row directly followed by a delimiter row with the
+    // same number of columns. Body rows run until a blank or pipeless line.
+    const header = trimmed.includes('|') ? splitRow(trimmed) : null;
+    const aligns = header && i + 1 < lines.length ? delimiterRow(lines[i + 1]) : null;
+    if (aligns && aligns.length === header.length) {
+      flush();
+      const cell = (tag, text, c) => {
+        const cls = aligns[c] ? ` class="align-${aligns[c]}"` : '';
+        return `<${tag}${cls}>${inline(text ?? '')}</${tag}>`;
+      };
+      const row = (tag, cells) => `<tr>${aligns.map((_, c) => cell(tag, cells[c], c)).join('')}</tr>`;
+      const body = [];
+      let j = i + 2;
+      while (j < lines.length && lines[j].includes('|') && lines[j].trim()) {
+        body.push(row('td', splitRow(lines[j].trim())));
+        j++;
+      }
+      const tbody = body.length ? `<tbody>${body.join('')}</tbody>` : '';
+      out.push(`<div class="md-table"><table><thead>${row('th', header)}</thead>${tbody}</table></div>`);
+      i = j - 1; // the loop's i++ lands on the line after the table
+      continue;
+    }
+
     // bullet list: -, * or + followed by a space
     if (/^[-*+] /.test(trimmed)) {
       flushParagraph();
@@ -174,6 +197,78 @@ export function toHtml(md) {
 
   flush();
   return out.join('');
+}
+
+/**
+ * Split a trimmed table row into raw cell texts. Leading and trailing pipes
+ * are optional. `\|` is a literal pipe; unlike GFM, pipes inside a closed code
+ * span do not split either, since agents rarely escape them there.
+ */
+function splitRow(row) {
+  const s = row.startsWith('|') ? row.slice(1) : row;
+  const cells = [];
+  let cur = '';
+  let endedOnPipe = false;
+
+  for (let i = 0; i < s.length;) {
+    const c = s[i];
+    endedOnPipe = false;
+    if (c === '\\' && s[i + 1] === '|') {
+      cur += '|';
+      i += 2;
+    } else if (c === '`') {
+      let runEnd = i + 1;
+      while (runEnd < s.length && s[runEnd] === '`') runEnd++;
+      const run = s.slice(i, runEnd);
+      const close = findRun(s, run, runEnd);
+      const end = close < 0 ? runEnd : close + run.length;
+      cur += s.slice(i, end).replace(/\\\|/g, '|');
+      i = end;
+    } else if (c === '|') {
+      cells.push(cur.trim());
+      cur = '';
+      endedOnPipe = true;
+      i++;
+    } else {
+      cur += c;
+      i++;
+    }
+  }
+
+  if (!endedOnPipe) cells.push(cur.trim());
+  return cells;
+}
+
+/** Index of a backtick run of exactly `run`'s length at or after `from`, or -1. */
+function findRun(s, run, from) {
+  let search = from;
+  while (search < s.length) {
+    const start = s.indexOf('`', search);
+    if (start < 0) return -1;
+    let end = start + 1;
+    while (end < s.length && s[end] === '`') end++;
+    if (end - start === run.length) return start;
+    search = end;
+  }
+  return -1;
+}
+
+/**
+ * Parse a table delimiter row such as `| :--- | :-: | --: |` into per-column
+ * alignments ('left', 'center', 'right' or ''), or null if it is not one.
+ */
+function delimiterRow(line) {
+  const trimmed = line.trim();
+  if (!trimmed.includes('|')) return null;
+  const cells = splitRow(trimmed);
+  if (!cells.length || !cells.every((c) => /^:?-+:?$/.test(c))) return null;
+  return cells.map((c) => {
+    const left = c.startsWith(':');
+    const right = c.endsWith(':');
+    if (left && right) return 'center';
+    if (right) return 'right';
+    return left ? 'left' : '';
+  });
 }
 
 /**
