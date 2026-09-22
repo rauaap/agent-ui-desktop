@@ -13,11 +13,13 @@ export class Workspace {
    * @param {{panes: HTMLElement, empty: HTMLElement}} dom
    * @param {import('./store.js').Store} store
    * @param {object} handlers
+   * @param {import('./inter-agent.js').SessionDirectory} directory
    */
-  constructor(dom, store, handlers) {
+  constructor(dom, store, handlers, directory) {
     this.dom = dom;
     this.store = store;
     this.handlers = handlers;
+    this.directory = directory;
     this.activeId = null;
     this.pane = null;
   }
@@ -43,7 +45,8 @@ export class Workspace {
       onError: this.handlers.onError,
       onLiveEvent: this.handlers.onLiveEvent,
       onConnected: this.handlers.onConnected,
-    });
+      onOpenSession: this.handlers.onOpenSession,
+    }, this.directory);
     this.pane.root.classList.add('active');
     this.dom.panes.appendChild(this.pane.root);
     this.updateEmptyState();

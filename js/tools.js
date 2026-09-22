@@ -61,9 +61,66 @@ export function isCanonicalAction(action) {
   }
 }
 
+const SESSION_TOOLS = new Set(['message_session', 'start_session', 'read_session']);
+const SESSION_TOOL_PREFIX = 'mcp__agent_ui__';
+
+/**
+ * The inter-session tool an `other` action invokes, or null. Claude names them
+ * through the server's MCP server and pi bare, and the tool_use row and the
+ * approval for one call can disagree about which, so both spellings count.
+ */
+export function sessionToolName(action) {
+  if (action?.kind !== 'other' || typeof action.name !== 'string') return null;
+  const bare = action.name.startsWith(SESSION_TOOL_PREFIX)
+    ? action.name.slice(SESSION_TOOL_PREFIX.length)
+    : action.name;
+  return SESSION_TOOLS.has(bare) ? bare : null;
+}
+
+const sessionId = (value) => (Number.isInteger(value) && value > 0 ? String(value) : null);
+const given = (value) => value !== undefined && value !== null;
+
+/**
+ * An inter-session tool's summary as text and session references, so a view
+ * can render the references as live names. The tool_use row carries the
+ * model's raw input and the approval the server's validated arguments, so the
+ * server's defaults are applied here: a missing `sandbox` is sandboxed and a
+ * missing `limit` is 200.
+ *
+ * @returns {Array<string | {sessionId: string}> | null}
+ */
+export function sessionToolParts(action) {
+  const tool = sessionToolName(action);
+  if (!tool) return null;
+  const args = action.arguments ?? {};
+  const target = sessionId(args.session_id);
+  const ref = target ? { sessionId: target } : 'no valid session ID';
+  switch (tool) {
+    case 'message_session':
+      return ['→ ', ref];
+    case 'read_session': {
+      const bits = [];
+      if (given(args.after)) bits.push(`after ${args.after}`);
+      bits.push(`limit ${given(args.limit) ? args.limit : 200}`);
+      return [ref, `  (${bits.join(' · ')})`];
+    }
+    case 'start_session': {
+      const bits = [];
+      if (given(args.agent)) bits.push(String(args.agent));
+      if (given(args.worktree_id)) bits.push(`worktree #${args.worktree_id}`);
+      bits.push(args.sandbox === false ? 'unsandboxed' : 'sandboxed');
+      return [`"${args.name ?? ''}" in ${args.project_path ?? ''}  (${bits.join(' · ')})`];
+    }
+    default:
+      return null;
+  }
+}
+
 /** Provider-neutral card title. */
 export function actionLabel(action) {
   if (!isCanonicalAction(action)) return 'TOOL';
+  const tool = sessionToolName(action);
+  if (tool) return tool.replace(/_/g, ' ').toUpperCase();
   const labels = {
     command: action.shell || 'command', read: 'read', edit: 'edit', write: 'write',
     search: action.mode === 'files' ? 'find' : 'search', list: 'list',
@@ -72,9 +129,17 @@ export function actionLabel(action) {
   return labels[action.kind].toUpperCase();
 }
 
-/** Concise provider-neutral summary used by cards, search, and export. */
-export function actionSummary(action) {
+/**
+ * Concise provider-neutral summary used by cards, search, and export.
+ * `nameSession` turns a session id into text; without it an id reads `#42`.
+ */
+export function actionSummary(action, nameSession = (id) => `#${id}`) {
   if (!isCanonicalAction(action)) return '';
+  const parts = sessionToolParts(action);
+  if (parts) {
+    return parts.map((part) => (typeof part === 'string' ? part : nameSession(part.sessionId)))
+      .join('');
+  }
   switch (action.kind) {
     case 'command': return action.command;
     case 'read':

@@ -16,6 +16,7 @@
  * gives the renderer a single job: mirror rows into elements.
  */
 
+import { inputSource, senderText, sessionText } from './inter-agent.js';
 import { actionLabel, actionSummary, isCanonicalAction, prettyJson } from './tools.js';
 import { isFormerWorktree } from './worktree.js';
 
@@ -378,7 +379,9 @@ export function reduce(state, event) {
     case 'input':
       state.openBubble = null;
       state.lastTool = null;
-      append(state, { kind: 'user', text: event.text ?? '' }, changes);
+      // `from` is null for the user's own words, including older records that
+      // predate provenance; see docs/inter-agent-ui.md.
+      append(state, { kind: 'user', text: event.text ?? '', from: inputSource(event) }, changes);
       break;
 
     case 'output': {
@@ -554,19 +557,22 @@ function resolveQuestion(state, requestId, answers, changes) {
 /**
  * Flatten a row to searchable text. Search runs over this rather than over the
  * DOM so it still matches rows the transcript cap has evicted from the page.
+ * `directory` (a SessionDirectory) lets session names match too.
  */
-export function rowText(row) {
+export function rowText(row, directory = null) {
+  const nameSession = (id) => sessionText(directory, id);
   switch (row.kind) {
     case 'user':
+      return row.from ? `${senderText(row.from, directory)} ${row.text}` : row.text;
     case 'agent':
       return row.text;
     case 'tool':
       return row.action
-        ? `${actionLabel(row.action)} ${actionSummary(row.action)} ${prettyJson(row.action)}`
+        ? `${actionLabel(row.action)} ${actionSummary(row.action, nameSession)} ${prettyJson(row.action)}`
         : prettyJson(row.rawEvent);
     case 'approval':
       return row.action
-        ? `${actionLabel(row.action)} ${actionSummary(row.action)} ${prettyJson(row.action)} ${row.resolved?.message ?? ''}`
+        ? `${actionLabel(row.action)} ${actionSummary(row.action, nameSession)} ${prettyJson(row.action)} ${row.resolved?.message ?? ''}`
         : prettyJson(row.rawEvent);
     case 'question':
       return row.questions.map((q) => {
@@ -583,7 +589,8 @@ export function rowText(row) {
 }
 
 /** Serialize a session's transcript to markdown, for export. */
-export function toMarkdown(state) {
+export function toMarkdown(state, directory = null) {
+  const nameSession = (id) => sessionText(directory, id);
   const parts = [`# ${state.name || 'Session'}`, ''];
   if (state.workingDir) {
     const kind = state.worktreeId
@@ -595,14 +602,14 @@ export function toMarkdown(state) {
   for (const row of state.rows) {
     switch (row.kind) {
       case 'user':
-        parts.push('### You', '', row.text, '');
+        parts.push(row.from ? `### From ${senderText(row.from, directory)}` : '### You', '', row.text, '');
         break;
       case 'agent':
         parts.push('### Agent', '', row.text, '');
         break;
       case 'tool':
         if (row.action) {
-          parts.push(`**${actionLabel(row.action)}** — \`${actionSummary(row.action)}\``, '');
+          parts.push(`**${actionLabel(row.action)}** — \`${actionSummary(row.action, nameSession)}\``, '');
           parts.push('```json', JSON.stringify(row.action, null, 2), '```', '');
         } else {
           parts.push(row.legacy ? '**Legacy event from an older server version**' : '**Malformed tool event**', '');

@@ -11,6 +11,8 @@ import * as api from './api.js';
 import { authBlocked, showTokenPrompt } from './auth.js';
 import { agentPreference, setAgentPreference } from './agents.js';
 import { partition } from './archive.js';
+import { copyText } from './clipboard.js';
+import { SessionDirectory } from './inter-agent.js';
 import { Store, isBusy } from './store.js';
 import { SettingsSync, settingsMeta } from './session-settings.js';
 import { Sidebar, belongsTo } from './sidebar.js';
@@ -34,6 +36,8 @@ import {
 import { baseOf, isFormerWorktree, normalize } from './worktree.js';
 
 const store = new Store();
+/** Every session, for naming the senders and targets of inter-agent messages. */
+const directory = new SessionDirectory();
 const notifier = new Notifier(store);
 const settingsSync = new SettingsSync();
 let catalogRequest = 0;
@@ -105,7 +109,9 @@ const workspace = new Workspace(
       notifier.setActive(id);
       sidebar.setActive(id);
     },
+    onOpenSession: openSessionById,
   },
+  directory,
 );
 
 const sidebar = new Sidebar(document.getElementById('tree'), store, {
@@ -120,6 +126,10 @@ const sidebar = new Sidebar(document.getElementById('tree'), store, {
   onPermissions: setSessionPermissions,
   onArchiveSessions: setSessionsArchived,
   onDeleteSessions: deleteSessions,
+  onCopyIds: async (sessions) => {
+    await copyText(sessions.map((session) => String(session.id)).join(', '));
+    toast(sessions.length === 1 ? 'Session ID copied' : `${sessions.length} session IDs copied`);
+  },
 });
 
 notifier.onActivate = (id) => {
@@ -205,6 +215,7 @@ function acceptSessions(sessions, fullRefresh, since, requestId, connection) {
   // `Map` or `Set` lookup is type-sensitive, and `has(1)` misses a key of
   // `"1"` without saying so.
   sessionsById = new Map(sessions.map((session) => [String(session.id), session]));
+  directory.setSessions(sessions);
 
   // Settings have no connect-time snapshot or replay: REST initializes them.
   if (active) {
@@ -713,6 +724,21 @@ async function createSession(project) {
     // refresh is what stops the next attempt offering it again.
     if (error.status === 404) await refresh();
   }
+}
+
+/**
+ * Open a session named by id — the sender of an agent message — which may be
+ * in any project, and bring its row into view in the tree.
+ */
+function openSessionById(id) {
+  const session = sessionsById.get(String(id));
+  if (!session) {
+    toast('That session is no longer available', true);
+    return;
+  }
+  store.setMeta(session.id, metaFor(session));
+  workspace.openSession(session.id);
+  sidebar.revealSession(session);
 }
 
 async function stopSession(id) {

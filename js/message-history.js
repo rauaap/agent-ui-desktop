@@ -4,10 +4,14 @@
  * with `!` is escaped to keep it a prompt when sent again.
  */
 
-/** Convert a transcript row to text that can safely be put in the composer. */
+/**
+ * Convert a transcript row to text that can safely be put in the composer.
+ * Inputs another agent sent are not the user's to recall; this is the one
+ * filter both the replayed and the live history paths go through.
+ */
 export function composerEntry(row) {
   if (row?.kind === 'bash') return `!${row.command ?? ''}`;
-  if (row?.kind !== 'user') return null;
+  if (row?.kind !== 'user' || row.from) return null;
   const text = String(row.text ?? '');
   return text.startsWith('!') ? `\\${text}` : text;
 }

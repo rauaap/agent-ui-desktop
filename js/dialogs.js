@@ -6,6 +6,7 @@
  */
 
 import { preferredAgent } from './agents.js';
+import { copyWithFeedback, idChip } from './clipboard.js';
 import { sandboxPathEntries, isExactOverride } from './sandbox-paths.js';
 import {
   formatPercent,
@@ -151,6 +152,19 @@ function detail(parent, label, value, { mono = false } = {}) {
   row.appendChild(el('span', 'dkey', label));
   row.appendChild(el('span', `dval${mono ? ' mono' : ''}`, value));
   parent.appendChild(row);
+  return row;
+}
+
+/** A read-only id row with a Copy button, for ids users hand to agents. */
+function idDetail(parent, label, id) {
+  const row = detail(parent, label, String(id), { mono: true });
+  const copy = el('button', 'btn small', 'Copy');
+  copy.type = 'button';
+  copy.addEventListener('click', (event) => {
+    event.preventDefault();
+    copyWithFeedback(copy, String(id), 'Copied');
+  });
+  row.appendChild(copy);
   return row;
 }
 
@@ -665,7 +679,9 @@ function worktreeRow(worktree, onRemove) {
   if (worktree.branch) bits.push(`created on ${worktree.branch}`);
   const count = worktree.session_count ?? 0;
   bits.push(count === 0 ? 'no sessions' : `${count} session${count === 1 ? '' : 's'}`);
-  text.appendChild(el('div', 'wt-meta', bits.join(' · ')));
+  const meta = el('div', 'wt-meta', `${bits.join(' · ')} · `);
+  meta.appendChild(idChip(worktree.id, 'worktree'));
+  text.appendChild(meta);
 
   const gone = worktree.exists === false;
   const button = el('button', 'btn small', gone ? 'Clean up…' : 'Remove…');
@@ -1258,6 +1274,13 @@ export function sessionSettingsDialog(state, handlers = {}) {
     confirm: 'Save',
     body: (body, submit) => {
       nameInput = field(body, 'Name', state.name);
+
+      const ids = el('div', 'details');
+      idDetail(ids, 'Session ID', state.id);
+      if (state.worktreeId !== null && state.worktreeId !== undefined) {
+        idDetail(ids, 'Worktree ID', state.worktreeId);
+      }
+      body.appendChild(ids);
 
       if (supportsSandbox(state.agent)) {
         const sandboxToggle = toggle(body, 'Sandbox',

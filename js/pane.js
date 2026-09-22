@@ -7,6 +7,7 @@
  */
 
 import { filedLabel } from './archive.js';
+import { idChip } from './clipboard.js';
 import {
   completionToken,
   insertCompletion,
@@ -36,12 +37,15 @@ export class SessionPane {
   /**
    * @param {string} sessionId
    * @param {import('./store.js').Store} store
-   * @param {{onSettings: Function, onError: Function, onUnarchive: Function}} handlers
+   * @param {{onSettings: Function, onError: Function, onUnarchive: Function,
+   *   onOpenSession: Function}} handlers
+   * @param {import('./inter-agent.js').SessionDirectory} directory
    */
-  constructor(sessionId, store, handlers) {
+  constructor(sessionId, store, handlers, directory) {
     this.id = sessionId;
     this.store = store;
     this.handlers = handlers;
+    this.directory = directory;
 
     this.socket = new SessionSocket(sessionId, store, (event) => {
       handlers.onLiveEvent?.(sessionId, event);
@@ -71,7 +75,8 @@ export class SessionPane {
           handlers.onError('Not connected — the answer was not sent');
         }
       },
-    });
+      onOpenSession: (id) => handlers.onOpenSession?.(id),
+    }, directory);
     this.root.appendChild(this.transcript.wrap);
     this.archiveNotice = this.buildArchiveNotice();
     this.root.appendChild(this.archiveNotice);
@@ -110,15 +115,19 @@ export class SessionPane {
     const head = el('div', 'pane-head');
 
     const titles = el('div', 'titles');
-    this.nameView = el('div', 'pane-name');
+    // Names are not unique, so the id people hand to agents sits beside it.
+    const nameRow = el('div', 'pane-name');
+    this.nameView = el('span', 'name');
+    nameRow.append(this.nameView, idChip(this.id, 'session'));
     // The cwd, tagged when it is a worktree rather than the project's own
     // directory — so it is obvious the session is not running where its
     // siblings are.
     this.dirView = el('div', 'pane-dir');
     this.worktreeTag = el('span', 'wt', 'WORKTREE');
     this.dirText = el('span', 'path');
+    this.worktreeChip = null;
     this.dirView.append(this.worktreeTag, this.dirText);
-    titles.append(this.nameView, this.dirView);
+    titles.append(nameRow, this.dirView);
     head.appendChild(titles);
 
     this.searchBox = el('input', 'search-box');
@@ -447,6 +456,15 @@ export class SessionPane {
     this.worktreeTag.style.display = state.worktreeId || formerWorktree ? '' : 'none';
     this.worktreeTag.classList.toggle('former', formerWorktree);
     this.worktreeTag.textContent = formerWorktree ? 'FORMER WORKTREE' : 'WORKTREE';
+    const worktreeId = state.worktreeId ? String(state.worktreeId) : null;
+    if (this.worktreeChip?.dataset.id !== worktreeId) {
+      this.worktreeChip?.remove();
+      this.worktreeChip = worktreeId ? idChip(worktreeId, 'worktree') : null;
+      if (this.worktreeChip) {
+        this.worktreeChip.dataset.id = worktreeId;
+        this.dirView.appendChild(this.worktreeChip);
+      }
+    }
 
     const offline = !state.connected;
     this.statusPill.className = `pill ${offline ? 'offline' : state.status}`;
@@ -481,7 +499,7 @@ export class SessionPane {
 
   exportMarkdown() {
     const state = this.store.session(this.id);
-    const blob = new Blob([toMarkdown(state)], { type: 'text/markdown' });
+    const blob = new Blob([toMarkdown(state, this.directory)], { type: 'text/markdown' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;

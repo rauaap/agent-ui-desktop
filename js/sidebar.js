@@ -312,7 +312,7 @@ export class Sidebar {
     // which is what a session started under an agent this server no longer
     // registers shows, rather than nothing.
     const agent = agentName(this.agents, session.agent);
-    item.title = `${session.name}\n${agent}` + (where ? `\n${where}` : '')
+    item.title = `${session.name}\n#${id}\n${agent}` + (where ? `\n${where}` : '')
       + (inArchive ? `\nArchived ${filedLabel(session.archived_at)}` : '');
     item.addEventListener('click', (event) => {
       this.selectSession(session, scope, event.shiftKey);
@@ -419,6 +419,10 @@ export class Sidebar {
       menu.appendChild(el('div', 'session-menu-separator'));
     }
 
+    // Names are not unique; the id is what a user hands to an agent.
+    action(sessions.length > 1 ? `Copy ${sessions.length} session IDs` : 'Copy session ID', () => {
+      this.handlers.onCopyIds(sessions);
+    });
     const archived = sessions.every(isArchived);
     action(archived ? 'Unarchive' : 'Archive', () => {
       this.handlers.onArchiveSessions(sessions, !archived);
@@ -482,6 +486,23 @@ export class Sidebar {
     saveExpanded([...this.expanded]);
     this.render();
     const row = this.root.querySelector(`[data-key="${cssEscape(archiveKey(project))}"]`);
+    row?.scrollIntoView?.({ block: 'nearest' });
+  }
+
+  /**
+   * Expand whichever part of the tree holds a session opened from elsewhere —
+   * an agent message's sender can be in any project — and scroll to its row.
+   */
+  revealSession(session) {
+    const project = this.projects.find((row) => belongsTo(session, row));
+    if (!project) return;
+    const keys = isArchived(session) ? [SECTION_KEY, archiveKey(project)] : [project.path];
+    if (keys.some((key) => !this.expanded.has(key))) {
+      for (const key of keys) this.expanded.add(key);
+      saveExpanded([...this.expanded]);
+      this.render();
+    }
+    const row = this.root.querySelector(`.session[data-id="${cssEscape(String(session.id))}"]`);
     row?.scrollIntoView?.({ block: 'nearest' });
   }
 

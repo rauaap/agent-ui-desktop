@@ -1249,5 +1249,6 @@ test('store: REST detachment during replay is not swapped back out', () => {
 
 results.push(...(await import('./session-settings-tests.js')).results);
 results.push(...(await import('./usage-tests.js')).results);
+results.push(...(await import('./inter-agent-tests.js')).results);
 
 export { results };

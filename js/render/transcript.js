@@ -7,8 +7,11 @@
  * transcript smooth without a virtual DOM.
  */
 
+import { copyText } from '../clipboard.js';
 import { bashOutputText, bashStatus, rowText } from '../store.js';
-import { actionLabel, actionSummary, prettyJson } from '../tools.js';
+import {
+  actionLabel, actionSummary, prettyJson, sessionToolName, sessionToolParts,
+} from '../tools.js';
 import { toHtml } from './markdown.js';
 import { toolBody } from './toolformat.js';
 
@@ -26,12 +29,14 @@ export class TranscriptView {
   /**
    * @param {string} sessionId
    * @param {import('../store.js').Store} store
-   * @param {{onApproval: Function, onAnswers: Function}} handlers
+   * @param {{onApproval: Function, onAnswers: Function, onOpenSession: Function}} handlers
+   * @param {import('../inter-agent.js').SessionDirectory} directory
    */
-  constructor(sessionId, store, handlers) {
+  constructor(sessionId, store, handlers, directory) {
     this.sessionId = sessionId;
     this.store = store;
     this.handlers = handlers;
+    this.directory = directory;
     /** @type {Map<number, HTMLElement>} row key -> element */
     this.nodes = new Map();
     this.query = '';
@@ -65,12 +70,16 @@ export class TranscriptView {
     this.resizeObserver.observe(this.list);
 
     this.unsubscribe = store.subscribe(sessionId, (changes) => this.applyChanges(changes));
+    // Session names are drawn in place rather than baked into rows, so the
+    // first session list, a rename or a deletion only repaints the references.
+    this.unsubscribeDirectory = directory.subscribe(() => this.repaintSessionRefs());
     this.rebuild();
   }
 
   destroy() {
     this.resizeObserver.disconnect();
     this.unsubscribe();
+    this.unsubscribeDirectory();
     this.nodes.clear();
   }
 
@@ -208,7 +217,7 @@ export class TranscriptView {
     for (const row of state.rows) {
       const node = this.nodes.get(row.key);
       if (!node) continue;
-      const hit = !this.query || rowText(row).toLowerCase().includes(needle);
+      const hit = !this.query || rowText(row, this.directory).toLowerCase().includes(needle);
       if (hit && this.query) rows++;
       node.classList.toggle('hidden-by-search', !!this.query && !hit);
       this.applyQueryTo(node, row);
@@ -222,8 +231,82 @@ export class TranscriptView {
   applyQueryTo(node, row) {
     clearMarks(node);
     if (!this.query) return;
-    if (!rowText(row).toLowerCase().includes(this.query.toLowerCase())) return;
+    if (!rowText(row, this.directory).toLowerCase().includes(this.query.toLowerCase())) return;
     highlight(node, this.query);
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* session references                                               */
+  /* ---------------------------------------------------------------- */
+
+  /** A session id that renders as its current name once the list is known. */
+  sessionRef(id, role) {
+    const node = el('span', 'session-ref');
+    node.dataset.sessionRef = id;
+    node.dataset.refRole = role;
+    this.paintSessionRef(node);
+    return node;
+  }
+
+  /**
+   * Senders link to their session and say "unavailable" once gone; a tool's
+   * target is plain text, and flagged when it does not exist so a bad id is
+   * seen before it is approved. Neither says anything is missing before the
+   * first session list has arrived.
+   */
+  paintSessionRef(node) {
+    const id = node.dataset.sessionRef;
+    const sender = node.dataset.refRole === 'sender';
+    const found = this.directory.lookup(id);
+    node.replaceChildren();
+    if (found.state === 'pending') {
+      node.appendChild(el('span', 'ref-id', `#${id}`));
+    } else if (found.state === 'missing') {
+      node.appendChild(sender
+        ? el('span', 'ref-missing', `session #${id} (unavailable)`)
+        : el('span', 'ref-unknown', `#${id} (unknown session)`));
+    } else if (sender) {
+      const link = el('button', 'ref-link', found.session.name || 'session');
+      link.type = 'button';
+      link.title = 'Open this session';
+      link.addEventListener('click', () => this.handlers.onOpenSession?.(id));
+      node.append(link, el('span', 'ref-id', `#${id}`));
+      if (found.session.archived) node.appendChild(el('span', 'ref-tag', 'ARCHIVED'));
+    } else {
+      node.append(el('span', 'ref-name', found.session.name || 'session'), ' ',
+        el('span', 'ref-id', `#${id}`));
+    }
+  }
+
+  repaintSessionRefs() {
+    const refs = this.list.querySelectorAll('[data-session-ref]');
+    if (!refs.length) return;
+    const touched = new Set();
+    for (const node of refs) {
+      this.paintSessionRef(node);
+      const row = node.closest('[data-key]');
+      if (row) touched.add(row.dataset.key);
+    }
+    // Repainting drops search marks, and a new name can change what matches.
+    if (!this.query) return;
+    for (const row of this.store.session(this.sessionId).rows) {
+      if (touched.has(String(row.key))) this.applyQueryTo(this.nodes.get(row.key), row);
+    }
+  }
+
+  /** The card-head summary, with inter-session tool targets as live names. */
+  summaryNode(action, prefix = '') {
+    const node = el('span', 'summary');
+    const parts = sessionToolParts(action);
+    if (!parts) {
+      node.textContent = prefix + actionSummary(action);
+      return node;
+    }
+    if (prefix) node.append(prefix);
+    for (const part of parts) {
+      node.append(typeof part === 'string' ? part : this.sessionRef(part.sessionId, 'target'));
+    }
+    return node;
   }
 
   /* ---------------------------------------------------------------- */
@@ -248,8 +331,35 @@ export class TranscriptView {
   }
 
   buildUser(row) {
+    if (row.from) return this.buildPeer(row);
     const wrap = el('div', 'row row-user');
     wrap.appendChild(el('div', 'msg-user', row.text));
+    return wrap;
+  }
+
+  /**
+   * An input another agent sent. Neither the user's bubble nor this session's
+   * own output, so it looks like neither: full width, in the info blue that
+   * means "another agent" throughout (docs/inter-agent-ui.md).
+   */
+  buildPeer(row) {
+    const wrap = el('div', 'row msg-peer');
+    const head = el('div', 'peer-head');
+    head.appendChild(el('span', 'peer-from', 'FROM'));
+    head.appendChild(row.from.type === 'agent'
+      ? this.sessionRef(row.from.sessionId, 'sender')
+      : el('span', 'ref-missing', 'unknown source'));
+    wrap.appendChild(head);
+    // Plain text, not markdown: this is input, like the user's bubble.
+    wrap.appendChild(el('div', 'peer-text', row.text));
+
+    const copy = el('button', 'copy', 'Copy');
+    copy.addEventListener('click', async () => {
+      await copyText(row.text);
+      copy.textContent = 'Copied';
+      setTimeout(() => { copy.textContent = 'Copy'; }, 1200);
+    });
+    wrap.appendChild(copy);
     return wrap;
   }
 
@@ -278,7 +388,7 @@ export class TranscriptView {
     const head = el('button', 'card-head');
     head.appendChild(el('span', 'twisty', '▸'));
     head.appendChild(el('span', 'tool', actionLabel(row.action)));
-    head.appendChild(el('span', 'summary', actionSummary(row.action)));
+    head.appendChild(this.summaryNode(row.action));
     head.addEventListener('click', () => card.classList.toggle('open'));
     card.appendChild(head);
 
@@ -297,7 +407,7 @@ export class TranscriptView {
 
     const head = el('div', 'card-head');
     head.appendChild(el('span', 'tool', pending ? 'APPROVAL REQUIRED' : 'APPROVAL'));
-    head.appendChild(el('span', 'summary', `${actionLabel(row.action)} · ${actionSummary(row.action)}`));
+    head.appendChild(this.summaryNode(row.action, `${actionLabel(row.action)} · `));
     card.appendChild(head);
 
     // Render from the approval's repeated action, never from the tool row it replaced.
@@ -519,6 +629,11 @@ function actionBody(action, expanded = false) {
       wrap.appendChild(copy);
     }
     wrap.appendChild(rawToggle(action));
+  } else if (sessionToolName(action)) {
+    // The message is what is being approved; the raw arguments stay a click away.
+    const message = action.arguments.message;
+    if (typeof message === 'string') wrap.appendChild(el('div', 'peer-text session-message', message));
+    wrap.appendChild(rawToggle(action));
   } else if (action.kind === 'other') {
     wrap.appendChild(rawBlock(action.arguments));
   } else {
@@ -577,23 +692,6 @@ function summarize(answers) {
     .map((value) => (Array.isArray(value) ? value.join(', ') : String(value)))
     .filter(Boolean)
     .join(' / ');
-}
-
-async function copyText(text) {
-  try {
-    await navigator.clipboard.writeText(text);
-  } catch {
-    // Clipboard API needs a secure context; plain http:// over WireGuard is not
-    // one, so fall back to the old selection trick.
-    const area = document.createElement('textarea');
-    area.value = text;
-    area.style.position = 'fixed';
-    area.style.opacity = '0';
-    document.body.appendChild(area);
-    area.select();
-    try { document.execCommand('copy'); } catch { /* nothing else to try */ }
-    area.remove();
-  }
 }
 
 /* ------------------------------------------------------------------ */
