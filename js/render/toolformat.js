@@ -41,6 +41,6 @@ function commandBlock(action) {
     const prompt = index === 0 ? '$ ' : '  ';
     return `<span class="cmd-prompt">${prompt}</span>${escapeHtml(line)}`;
   });
-  if (action.description) lines.push(`<span class="cmd-desc"># ${escapeHtml(action.description)}</span>`);
+  if (action.description) lines.unshift(`<span class="cmd-desc"># ${escapeHtml(action.description)}</span>`);
   return block(lines.join('\n'));
 }
