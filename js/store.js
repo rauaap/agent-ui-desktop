@@ -94,6 +94,7 @@ function blankState(id) {
     archivedAt: null,
     autoApproveWrite: false,
     autoApproveCommand: false,
+    autoApproveInterAgent: false,
     sandbox: null, // Missing on older servers means unknown, not enabled.
     sandboxSaving: false,
     settingsLoaded: false,
@@ -210,6 +211,7 @@ export class Store {
       archivedAt: live.archivedAt,
       autoApproveWrite: live.autoApproveWrite,
       autoApproveCommand: live.autoApproveCommand,
+      autoApproveInterAgent: live.autoApproveInterAgent,
       sandbox: live.sandbox,
       sandboxSaving: live.sandboxSaving,
       settingsLoaded: live.settingsLoaded,
@@ -349,6 +351,9 @@ export function reduce(state, event) {
       }
       if (typeof event.auto_approve_command === 'boolean') {
         state.autoApproveCommand = event.auto_approve_command;
+      }
+      if (typeof event.auto_approve_inter_agent_communication === 'boolean') {
+        state.autoApproveInterAgent = event.auto_approve_inter_agent_communication;
       }
       changes.push({ op: 'meta' });
       break;

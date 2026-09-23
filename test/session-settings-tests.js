@@ -71,17 +71,23 @@ await test('settings: partial frames preserve the other settings', () => {
   equal(sync.reconcile({ id: '7', sandbox: true, auto_approve_command: true }, start), {
     id: '7', sandbox: false, auto_approve_command: true,
   });
+  sync.record('7', { auto_approve_inter_agent_communication: true });
+  equal(sync.reconcile({ id: '7', auto_approve_inter_agent_communication: false }, start), {
+    id: '7', auto_approve_inter_agent_communication: true, sandbox: false,
+  });
 });
 
 await test('settings: live frames survive an aborted replay without transcript rows', () => {
   const store = new Store();
   store.setMeta('7', { sandbox: true, autoApproveWrite: true });
   store.beginReplay('7');
-  store.apply('7', { type: 'settings', sandbox: false, auto_approve_command: true });
+  store.apply('7', { type: 'settings', sandbox: false, auto_approve_command: true,
+    auto_approve_inter_agent_communication: true });
   store.abortReplay('7');
   equal(store.session('7').sandbox, false);
   equal(store.session('7').autoApproveWrite, true);
   equal(store.session('7').autoApproveCommand, true);
+  equal(store.session('7').autoApproveInterAgent, true);
   equal(store.session('7').rows, []);
   store.beginReplay('7');
   store.setMeta('7', { sandbox: true, sandboxSaving: true, settingsLoaded: true });
@@ -215,6 +221,7 @@ await test('sandbox API: creation preserves false and numeric worktree ids; PATC
     await api.setAutoApprove('7', undefined, true);
     await api.createSession('name', '/app', 'pi', null, true);
     await api.createSession('name', '/app', 'claude-code', '3', false);
+    await api.setAutoApprove('7', undefined, undefined, true);
     equal(calls[0].body, { name: 'name', project_path: '/app', agent: 'pi', worktree_id: 3, sandbox: false });
     equal('sandbox' in calls[1].body, false);
     equal(calls[2], { path: '/sessions/7', method: 'PATCH', body: { sandbox: false } });
@@ -225,6 +232,7 @@ await test('sandbox API: creation preserves false and numeric worktree ids; PATC
     equal(calls[7].body, {
       name: 'name', project_path: '/app', agent: 'claude-code', worktree_id: 3, sandbox: false,
     });
+    equal(calls[8].body, { auto_approve_inter_agent_communication: true });
   } finally { globalThis.fetch = original; }
 });
 

@@ -243,6 +243,7 @@ function acceptSettings(row) {
   const meta = {};
   for (const [wire, local] of Object.entries({
     sandbox: 'sandbox', auto_approve_write: 'autoApproveWrite', auto_approve_command: 'autoApproveCommand',
+    auto_approve_inter_agent_communication: 'autoApproveInterAgent',
   })) {
     if (typeof row[wire] !== 'boolean') continue;
     if (current) current[wire] = row[wire];
@@ -463,13 +464,14 @@ async function setSessionArchived(id, archived) {
  * are queued because users commonly enable both toggles in quick succession;
  * otherwise the older response could arrive last and undo the second click.
  */
-async function setSessionPermissions(session, write, command) {
+async function setSessionPermissions(session, write, command, interAgent) {
   const id = String(session.id);
   const previous = permissionUpdates.get(id) || Promise.resolve();
   const update = previous.catch(() => {}).then(async () => {
-    const row = await patchSettings(() => api.setAutoApprove(id, write, command));
+    const row = await patchSettings(() => api.setAutoApprove(id, write, command, interAgent));
     session.auto_approve_write = row.auto_approve_write;
     session.auto_approve_command = row.auto_approve_command;
+    session.auto_approve_inter_agent_communication = row.auto_approve_inter_agent_communication;
     if (typeof row.sandbox === 'boolean') session.sandbox = row.sandbox;
   });
   permissionUpdates.set(id, update);
@@ -755,6 +757,7 @@ async function openSessionSettings(id) {
     name: state.name,
     write: state.autoApproveWrite,
     command: state.autoApproveCommand,
+    interAgent: state.autoApproveInterAgent,
     archived: !!state.archivedAt,
   };
   const result = await sessionSettingsDialog(state, {
@@ -819,11 +822,13 @@ async function openSessionSettings(id) {
       await patchSettings(() => api.renameSession(id, result.name));
     }
     if (result.autoApproveWrite !== before.write
-        || result.autoApproveCommand !== before.command) {
+        || result.autoApproveCommand !== before.command
+        || result.autoApproveInterAgent !== before.interAgent) {
       await patchSettings(() => api.setAutoApprove(
         id,
         result.autoApproveWrite !== before.write ? result.autoApproveWrite : undefined,
         result.autoApproveCommand !== before.command ? result.autoApproveCommand : undefined,
+        result.autoApproveInterAgent !== before.interAgent ? result.autoApproveInterAgent : undefined,
       ));
     }
     // Last, and on its own: it is the one field here that can be refused (409

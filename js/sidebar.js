@@ -388,11 +388,12 @@ export class Sidebar {
       const session = sessions[0];
       let write = !!session.auto_approve_write;
       let command = !!session.auto_approve_command;
+      let interAgent = !!session.auto_approve_inter_agent_communication;
       menu.appendChild(el('div', 'session-menu-label', 'Permissions'));
 
-      // These deliberately stay open: turning both permissions on is a common
-      // two-click operation. Keep the local pair current so the second PATCH
-      // includes the value chosen by the first click.
+      // These deliberately stay open: turning several permissions on is a
+      // common multi-click operation. Keep the local values current so a later
+      // PATCH includes the values chosen by earlier clicks.
       const permission = (label, getChecked, setChecked) => {
         const button = el('button', 'session-menu-item');
         button.type = 'button';
@@ -410,12 +411,15 @@ export class Sidebar {
           paint();
           session.auto_approve_write = write;
           session.auto_approve_command = command;
-          this.handlers.onPermissions(session, write, command);
+          session.auto_approve_inter_agent_communication = interAgent;
+          this.handlers.onPermissions(session, write, command, interAgent);
         });
         menu.appendChild(button);
       };
       permission('Auto-approve writes', () => write, (value) => { write = value; });
       permission('Auto-approve commands', () => command, (value) => { command = value; });
+      permission('Auto-approve inter-agent communication',
+        () => interAgent, (value) => { interAgent = value; });
       menu.appendChild(el('div', 'session-menu-separator'));
     }
 

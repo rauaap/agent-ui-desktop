@@ -1254,8 +1254,8 @@ export function createWorktreeDialog(
  * Sandbox saves immediately through its dedicated handler; Cancel does not undo
  * a confirmed sandbox change. The control subscribes to live session metadata.
  *
- * Resolves `{name, autoApproveWrite, autoApproveCommand, archived, detached, deleted}`,
- * or null.
+ * Resolves `{name, autoApproveWrite, autoApproveCommand, autoApproveInterAgent,
+ * archived, detached, deleted}`, or null.
  *
  * @param {object} state the store's session state
  */
@@ -1263,6 +1263,7 @@ export function sessionSettingsDialog(state, handlers = {}) {
   let nameInput;
   let writeToggle;
   let commandToggle;
+  let interAgentToggle;
   let archiveToggle;
   let detached = false;
   let deleted = false;
@@ -1333,6 +1334,13 @@ export function sessionSettingsDialog(state, handlers = {}) {
         'Shell commands run without asking.',
         state.autoApproveCommand,
       );
+      interAgentToggle = toggle(
+        body,
+        'Auto-approve inter-agent communication',
+        'This session messages, starts and reads other sessions without asking. '
+        + 'Messages to unsandboxed sessions always ask.',
+        state.autoApproveInterAgent,
+      );
       body.appendChild(el('div', 'dlg-note',
         'Auto-approved tools still appear in the transcript, marked as such. '
         + 'Read-only tools never prompt.'));
@@ -1389,6 +1397,7 @@ export function sessionSettingsDialog(state, handlers = {}) {
         name,
         autoApproveWrite: writeToggle.checked,
         autoApproveCommand: commandToggle.checked,
+        autoApproveInterAgent: interAgentToggle.checked,
         archived: archiveToggle.checked,
         detached,
         deleted,

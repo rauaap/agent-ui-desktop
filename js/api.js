@@ -220,10 +220,11 @@ export const setSandbox = (id, sandbox) =>
 export const renameSession = (id, name) =>
   request('PATCH', `/sessions/${id}`, { name }).then(asSession);
 
-export const setAutoApprove = (id, write, command) =>
+export const setAutoApprove = (id, write, command, interAgent) =>
   request('PATCH', `/sessions/${id}`, {
     auto_approve_write: write,
     auto_approve_command: command,
+    auto_approve_inter_agent_communication: interAgent,
   }).then(asSession);
 
 /**

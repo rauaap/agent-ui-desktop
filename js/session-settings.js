@@ -4,6 +4,7 @@ export function settingsMeta(row) {
     sandbox: typeof row.sandbox === 'boolean' ? row.sandbox : null,
     autoApproveWrite: !!row.auto_approve_write,
     autoApproveCommand: !!row.auto_approve_command,
+    autoApproveInterAgent: !!row.auto_approve_inter_agent_communication,
   };
 }
 
@@ -35,7 +36,8 @@ export class SettingsSync {
   record(id, row) {
     id = String(id);
     const fields = this.latest.get(id) || {};
-    for (const key of ['sandbox', 'auto_approve_write', 'auto_approve_command']) {
+    for (const key of ['sandbox', 'auto_approve_write', 'auto_approve_command',
+      'auto_approve_inter_agent_communication']) {
       if (typeof row[key] === 'boolean') {
         fields[key] = { value: row[key], revision: ++this.revision };
       }

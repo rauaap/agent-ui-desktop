@@ -396,6 +396,7 @@ const freshState = () => ({
   archivedAt: null,
   autoApproveWrite: false,
   autoApproveCommand: false,
+  autoApproveInterAgent: false,
   connected: false,
   rows: [],
   nextKey: 1,
@@ -518,10 +519,12 @@ test('reducer: question resolves by request id', () => {
 
 test('reducer: settings and renamed update metadata', () => {
   const s = feed(freshState(),
-    { type: 'settings', auto_approve_write: true, auto_approve_command: false },
+    { type: 'settings', auto_approve_write: true, auto_approve_command: false,
+      auto_approve_inter_agent_communication: true },
     { type: 'renamed', name: 'brisk-otter' });
   assertTrue(s.autoApproveWrite);
   assertEqual(s.autoApproveCommand, false);
+  assertTrue(s.autoApproveInterAgent);
   assertEqual(s.name, 'brisk-otter');
 });
 
