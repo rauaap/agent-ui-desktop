@@ -116,6 +116,49 @@ export function sessionToolParts(action) {
   }
 }
 
+const SANDBOX_BYPASS_NAMES = new Set([
+  'Execute outside sandbox', 'bypass_sandbox', `${SESSION_TOOL_PREFIX}bypass_sandbox`,
+]);
+const BYPASS_DEFAULT_TIMEOUT_SECONDS = 120;
+
+/**
+ * The fields of a sandbox bypass, or null for any other action. The approval
+ * is named "Execute outside sandbox" and always carries the server-filled
+ * `timeout_seconds`; the tool_use row carries the model's raw input, so the
+ * server's 120-second default is applied here when it is missing.
+ */
+export function sandboxBypass(action) {
+  if (action?.kind !== 'other' || !SANDBOX_BYPASS_NAMES.has(action.name)
+      || !object(action.arguments)) return null;
+  const args = action.arguments;
+  return {
+    command: args.command,
+    reason: args.reason,
+    cwd: args.cwd,
+    timeoutSeconds: given(args.timeout_seconds) ? args.timeout_seconds : BYPASS_DEFAULT_TIMEOUT_SECONDS,
+  };
+}
+
+/**
+ * A timeout in exact human units: `0.5 s`, `90 s` → `1 min 30 s`, `600` →
+ * `10 min`. Anything but a finite positive number is shown as received.
+ */
+export function formatTimeout(seconds) {
+  if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds <= 0) {
+    return `${typeof seconds === 'string' ? JSON.stringify(seconds) : String(seconds)} (invalid)`;
+  }
+  const round = (value) => Math.round(value * 1000) / 1000;
+  if (seconds < 60) return `${round(seconds)} s`;
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const rest = round(seconds % 60);
+  const parts = [];
+  if (hours) parts.push(`${hours} h`);
+  if (minutes) parts.push(`${minutes} min`);
+  if (rest) parts.push(`${rest} s`);
+  return parts.join(' ');
+}
+
 /** Provider-neutral card title. */
 export function actionLabel(action) {
   if (!isCanonicalAction(action)) return 'TOOL';

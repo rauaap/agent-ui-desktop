@@ -26,7 +26,13 @@ import { asProject, asSession, asWorktree, wireId } from '../js/ids.js';
 import { toHtml } from '../js/render/markdown.js';
 import { composerEntries, MessageHistory } from '../js/message-history.js';
 import { Store, parseComposerInput, reduce, rowText } from '../js/store.js';
-import { actionSummary, approvalResponsePayload, isCanonicalAction } from '../js/tools.js';
+import {
+  actionSummary,
+  approvalResponsePayload,
+  formatTimeout,
+  isCanonicalAction,
+  sandboxBypass,
+} from '../js/tools.js';
 import {
   DEFAULT_TEMPLATE,
   absolutize,
@@ -378,6 +384,34 @@ test('actions: malformed and extended actions fail safely', () => {
   assertTrue(!isCanonicalAction({ kind: 'read', path: 'a', limit: 1.5 }));
   assertTrue(!isCanonicalAction({ kind: 'write', path: 'a', content: '', provider: 'pi' }));
   assertTrue(!isCanonicalAction({ kind: 'future', value: true }));
+});
+
+test('actions: a sandbox bypass approval exposes its timeout', () => {
+  const approval = {
+    kind: 'other',
+    name: 'Execute outside sandbox',
+    arguments: { command: 'docker ps', reason: 'needs the socket', timeout_seconds: 600, cwd: '/p' },
+  };
+  assertEqual(JSON.stringify(sandboxBypass(approval)),
+    JSON.stringify({ command: 'docker ps', reason: 'needs the socket', cwd: '/p', timeoutSeconds: 600 }));
+  // The tool_use row carries the model's raw input; the server defaults to 120.
+  const call = { kind: 'other', name: 'mcp__agent_ui__bypass_sandbox', arguments: { command: 'ls', reason: 'x' } };
+  assertEqual(sandboxBypass(call).timeoutSeconds, 120);
+  assertEqual(sandboxBypass({ ...call, name: 'bypass_sandbox' }).timeoutSeconds, 120);
+  assertEqual(sandboxBypass({ kind: 'other', name: 'Deploy', arguments: {} }), null);
+  assertEqual(sandboxBypass(commandAction('ls')), null);
+});
+
+test('actions: timeouts read in exact human units', () => {
+  assertEqual(formatTimeout(0.5), '0.5 s');
+  assertEqual(formatTimeout(45), '45 s');
+  assertEqual(formatTimeout(120), '2 min');
+  assertEqual(formatTimeout(90), '1 min 30 s');
+  assertEqual(formatTimeout(600), '10 min');
+  assertEqual(formatTimeout(3600), '1 h');
+  assertEqual(formatTimeout(5410.25), '1 h 30 min 10.25 s');
+  assertEqual(formatTimeout(0), '0 (invalid)');
+  assertEqual(formatTimeout('5'), '"5" (invalid)');
 });
 
 /* ------------------------------------------------------------------ */
