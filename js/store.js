@@ -7,7 +7,8 @@
  * tangled up in view code (SessionActivity.handleMessage) —
  *
  *   - consecutive `output` chunks coalesce into one agent message
- *   - an `approval_request` swallows the `tool_use` card it duplicates
+ *   - an `approval_request` replaces, in place, the `tool_use` card with its
+ *     call ID
  *   - approvals and questions resolve in place when their response arrives
  *   - a `bash_output` fills in the card its `bash_input` opened
  *   - anything that isn't `output` closes the open agent message
@@ -105,9 +106,6 @@ function blankState(id) {
     nextKey: 1,
     // The agent message currently accepting chunks, or null.
     openBubble: null,
-    // The most recent tool_use row, still eligible to be replaced by a matching
-    // approval_request. Cleared by anything that ends the tool's moment.
-    lastTool: null,
     pendingApprovalId: null,
     pendingQuestionId: null,
   };
@@ -283,7 +281,6 @@ function append(state, row, changes) {
   while (state.rows.length > MAX_ROWS) {
     const dropped = state.rows.shift();
     if (state.openBubble === dropped) state.openBubble = null;
-    if (state.lastTool === dropped) state.lastTool = null;
     changes.push({ op: 'remove', row: dropped });
   }
   return row;
@@ -383,14 +380,12 @@ export function reduce(state, event) {
 
     case 'input':
       state.openBubble = null;
-      state.lastTool = null;
       // `from` is null for the user's own words, including older records that
       // predate provenance; see docs/inter-agent-ui.md.
       append(state, { kind: 'user', text: event.text ?? '', from: inputSource(event) }, changes);
       break;
 
     case 'output': {
-      state.lastTool = null;
       const text = event.text ?? '';
       if (state.openBubble) {
         state.openBubble.text += text;
@@ -406,34 +401,21 @@ export function reduce(state, event) {
       const canonical = exactEventKeys(event, ['type', 'call_id', 'action'])
         && typeof event.call_id === 'string' && event.call_id.length > 0
         && isCanonicalAction(event.action);
-      const row = append(state, {
+      append(state, {
         kind: 'tool',
         callId: canonical ? event.call_id : null,
         action: canonical ? event.action : null,
         rawEvent: canonical ? null : event,
         legacy: !Object.hasOwn(event, 'action'),
       }, changes);
-      state.lastTool = canonical ? row : null;
       break;
     }
 
     case 'approval_request': {
       state.openBubble = null;
       const canonical = validApprovalRequest(event);
-      // Only invocation identity can replace a call card. The approval repeats
-      // its action, so rendering never depends on the removed row.
-      const previous = state.lastTool;
-      if (canonical && previous && previous.callId === event.call_id) {
-        const index = state.rows.indexOf(previous);
-        if (index >= 0) {
-          state.rows.splice(index, 1);
-          changes.push({ op: 'remove', row: previous });
-        }
-      }
-      state.lastTool = null;
-
       const auto = canonical && event.auto_approved === true;
-      const row = append(state, {
+      const row = {
         kind: 'approval',
         id: canonical ? event.request_id : '',
         callId: canonical ? event.call_id : null,
@@ -444,7 +426,23 @@ export function reduce(state, event) {
         options: canonical ? event.options : [],
         // An auto-approved request never blocks, so it is born resolved.
         resolved: auto ? { behavior: 'allow', auto: true, message: null } : null,
-      }, changes);
+      };
+      // Only invocation identity can replace a call card, and a call ID names
+      // one invocation, so a match anywhere is the right card — parallel calls
+      // put several tool cards ahead of their approvals. The approval takes the
+      // card's key and slot, so the view swaps it in place. It repeats the
+      // action, so rendering never depends on the replaced row.
+      const index = canonical
+        ? state.rows.findLastIndex((r) => r.kind === 'tool'
+          && r.callId !== null && r.callId === event.call_id)
+        : -1;
+      if (index >= 0) {
+        row.key = state.rows[index].key;
+        state.rows[index] = row;
+        changes.push({ op: 'update', row });
+      } else {
+        append(state, row, changes);
+      }
       // Legacy and malformed approvals are display-only.
       if (canonical && !auto) state.pendingApprovalId = row.id;
       break;
@@ -463,7 +461,6 @@ export function reduce(state, event) {
 
     case 'question': {
       state.openBubble = null;
-      state.lastTool = null;
       const row = append(state, {
         kind: 'question',
         id: event.request_id ?? '',
@@ -483,7 +480,6 @@ export function reduce(state, event) {
     // output can arrive several messages after the command that asked for it.
     case 'bash_input':
       state.openBubble = null;
-      state.lastTool = null;
       append(state, { kind: 'bash', command: event.command ?? '', result: null }, changes);
       break;
 
@@ -510,7 +506,6 @@ export function reduce(state, event) {
         // No echo to fill in — a replay that began past it, or a command
         // another client started before we connected. The card stands alone.
         state.openBubble = null;
-        state.lastTool = null;
         append(state, { kind: 'bash', command, result }, changes);
       }
       break;
@@ -518,12 +513,10 @@ export function reduce(state, event) {
 
     case 'done':
       state.openBubble = null;
-      state.lastTool = null;
       break;
 
     case 'error':
       state.openBubble = null;
-      state.lastTool = null;
       append(state, { kind: 'error', message: event.message || 'Unknown error' }, changes);
       break;
 

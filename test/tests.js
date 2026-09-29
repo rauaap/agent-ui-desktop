@@ -435,7 +435,6 @@ const freshState = () => ({
   rows: [],
   nextKey: 1,
   openBubble: null,
-  lastTool: null,
   pendingApprovalId: null,
   pendingQuestionId: null,
 });
@@ -479,6 +478,75 @@ test('reducer: identical calls with different IDs are not confused', () => {
     { type: 'tool_use', call_id: 'c1', action },
     { type: 'approval_request', request_id: 'p1', call_id: 'c2', action, options: [] });
   assertEqual(s.rows.length, 2);
+});
+
+const assertSame = (actual, expected, note) =>
+  assertEqual(JSON.stringify(actual), JSON.stringify(expected), note);
+
+test('reducer: parallel approvals each replace their own tool card in place', () => {
+  const api = commandAction('api');
+  const desktop = commandAction('desktop');
+  const android = commandAction('android');
+  const s = freshState();
+  const changes = [];
+  const step = (event) => changes.push(...reduce(s, event));
+  step({ type: 'tool_use', call_id: 'c1', action: api });
+  step({ type: 'approval_request', request_id: 'p1', call_id: 'c1', action: api, options: [] });
+  step({ type: 'tool_use', call_id: 'c2', action: desktop });
+  step({ type: 'tool_use', call_id: 'c3', action: android });
+  const keys = s.rows.map((r) => r.key);
+  step({ type: 'approval_response', request_id: 'p1', behavior: 'allow' });
+  step({ type: 'approval_request', request_id: 'p2', call_id: 'c2', action: desktop, options: [] });
+  assertEqual(s.pendingApprovalId, 'p2');
+  step({ type: 'approval_response', request_id: 'p2', behavior: 'allow' });
+  step({ type: 'approval_request', request_id: 'p3', call_id: 'c3', action: android, options: [] });
+  assertSame(s.rows.map((r) => r.kind), ['approval', 'approval', 'approval']);
+  assertSame(s.rows.map((r) => r.callId), ['c1', 'c2', 'c3']);
+  assertSame(s.rows.map((r) => r.key), keys, 'each approval keeps its card\'s key');
+  assertEqual(s.pendingApprovalId, 'p3');
+  assertTrue(!changes.some((c) => c.op === 'remove'), 'nothing is removed');
+  assertEqual(changes.filter((c) => c.op === 'append').length, 3, 'only the tool cards append');
+});
+
+test('reducer: auto-approved parallel calls replace their tool cards', () => {
+  const a = commandAction('a');
+  const b = commandAction('b');
+  const s = feed(freshState(),
+    { type: 'tool_use', call_id: 'c1', action: a },
+    { type: 'tool_use', call_id: 'c2', action: b },
+    { type: 'approval_request', request_id: 'p1', call_id: 'c1', action: a, options: [], auto_approved: true },
+    { type: 'approval_request', request_id: 'p2', call_id: 'c2', action: b, options: [], auto_approved: true });
+  assertSame(s.rows.map((r) => [r.kind, r.callId]), [['approval', 'c1'], ['approval', 'c2']]);
+  assertTrue(s.rows.every((r) => r.auto && r.resolved.behavior === 'allow'));
+  assertEqual(s.pendingApprovalId, null);
+});
+
+test('reducer: output between a call and its approval does not block the merge', () => {
+  const action = commandAction('ls');
+  const s = feed(freshState(),
+    { type: 'tool_use', call_id: 'c1', action },
+    { type: 'output', text: 'running it' },
+    { type: 'approval_request', request_id: 'p1', call_id: 'c1', action, options: [] });
+  assertSame(s.rows.map((r) => r.kind), ['approval', 'agent']);
+  assertEqual(s.pendingApprovalId, 'p1');
+});
+
+test('reducer: an approval with no matching tool card appends', () => {
+  const s = freshState();
+  reduce(s, { type: 'output', text: 'hi' });
+  const changes = reduce(s,
+    { type: 'approval_request', request_id: 'p1', call_id: 'c9', action: commandAction('ls'), options: [] });
+  assertSame(s.rows.map((r) => r.kind), ['agent', 'approval']);
+  assertSame(changes.map((c) => c.op), ['append']);
+  assertTrue(s.rows[1].key !== s.rows[0].key, 'the appended row gets a fresh key');
+});
+
+test('reducer: a tool card with a null callId never matches', () => {
+  const s = feed(freshState(),
+    { type: 'tool_use', call_id: 'c1', tool: 'Bash', input: { command: 'ls' } },
+    { type: 'approval_request', request_id: 'p1', call_id: 'c1', action: commandAction('ls'), options: [] });
+  assertEqual(s.rows[0].callId, null);
+  assertSame(s.rows.map((r) => r.kind), ['tool', 'approval']);
 });
 
 test('reducer: approval_response resolves the canonical card', () => {
