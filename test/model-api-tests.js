@@ -1,4 +1,4 @@
-/** Isolated model transport/dialog tests: node test/model-api-tests.js (no network). */
+/** Isolated agent-catalog transport/dialog tests: node test/model-api-tests.js (no network). */
 import assert from 'node:assert/strict';
 
 class Element {
@@ -37,19 +37,19 @@ globalThis.fetch = async (url, options) => {
 const api = await import('../js/api.js');
 const { newSessionDialog } = await import('../js/dialogs.js');
 
-// GET /models is authenticated and normalized; a failed harness does not break the other.
+// GET /agents carries each agent's catalog, normalized; a failed harness does not break the other.
 reply = {
   status: 200,
-  body: {
-    'claude-code': { models: [{ id: 'claude-opus-5-5', name: 'Opus 5.5' }], error: null },
-    pi: { models: [], error: 'Model discovery failed: boom' },
-  },
+  body: [
+    { id: 'claude-code', name: 'Claude Code', default: true, models: [], models_error: 'Unavailable' },
+    { id: 'pi', name: 'Pi', default: false, models: [{ id: 'p/m', name: 'M' }], models_error: null },
+  ],
 };
-const catalogs = await api.listModels();
-assert.equal(requests.at(-1).url, 'http://server.test/models');
+const listed = await api.listAgents();
+assert.equal(requests.at(-1).url, 'http://server.test/agents');
 assert.equal(requests.at(-1).method, 'GET');
-assert.deepEqual(catalogs.pi, { models: [], error: 'Model discovery failed: boom' });
-assert.deepEqual(catalogs['claude-code'].models, [{ id: 'claude-opus-5-5', name: 'Opus 5.5' }]);
+assert.deepEqual(listed, reply.body);
+assert.equal(api.listModels, undefined);
 
 // POST /sessions always sends the model it is given.
 reply = { status: 200, body: { id: 3, project_id: 1, worktree_id: null, agent: 'pi', model: 'a/b' } };
@@ -68,12 +68,15 @@ await assert.rejects(api.createSession('S', '/p', 'pi', 'x'), (error) => error.s
 
 const tick = () => new Promise((resolve) => setTimeout(resolve));
 const agents = [
-  { id: 'claude-code', name: 'Claude Code', default: true },
-  { id: 'pi', name: 'Pi', default: false },
+  {
+    id: 'claude-code', name: 'Claude Code', default: true, models_error: null,
+    models: [{ id: 'claude-opus-5-5', name: 'Opus 5.5' }, { id: 'claude-sonnet-5-5', name: 'Sonnet 5.5' }],
+  },
+  { id: 'pi', name: 'Pi', default: false, models: [], models_error: 'Model discovery failed: boom' },
 ];
 const project = { name: 'P', path: '/p', is_git_repo: false };
-const open = (handlers, models, agentList = agents) => {
-  const result = newSessionDialog(project, [], agentList, handlers, models);
+const open = (handlers, agentList = agents) => {
+  const result = newSessionDialog(project, [], agentList, handlers);
   const dialog = document.body.children.at(-1);
   const [agentSelect, modelSelect] = dialog.all.filter((node) => node.tag === 'select');
   const note = modelSelect?.parent.children.find((node) => node.className.startsWith('dlg-note'));
@@ -84,9 +87,7 @@ const open = (handlers, models, agentList = agents) => {
   return { result, dialog, agentSelect, modelSelect, note, create, error, choose, options };
 };
 
-// Loading holds Create; the catalog then preselects each agent's first model.
-let resolveCatalogs;
-const pending = new Promise((resolve) => { resolveCatalogs = resolve; });
+// The selected agent's catalog preselects its first model.
 const submitted = [];
 let refuse = null;
 const first = open({
@@ -95,18 +96,8 @@ const first = open({
     if (refuse) throw refuse;
     return { id: '9', ...spec };
   },
-}, pending);
-first.choose('claude-code');
-assert.deepEqual(first.options(), []);
-assert.equal(first.create.disabled, true);
-assert.equal(first.note.textContent, 'Loading models…');
-assert.doesNotMatch(first.note.className, /warn/);
-
-resolveCatalogs({
-  'claude-code': { models: [{ id: 'claude-opus-5-5', name: 'Opus 5.5' }, { id: 'claude-sonnet-5-5', name: 'Sonnet 5.5' }], error: null },
-  pi: { models: [], error: 'Model discovery failed: boom' },
 });
-await tick();
+first.choose('claude-code');
 // No "Default" entry: the first model is selected.
 assert.deepEqual(first.options(), ['claude-opus-5-5', 'claude-sonnet-5-5']);
 assert.equal(first.modelSelect.value, 'claude-opus-5-5');
@@ -145,38 +136,25 @@ const session = await first.result;
 assert.equal(session.model, 'claude-sonnet-5-5');
 assert.deepEqual(submitted.map((spec) => spec.model), ['claude-sonnet-5-5', 'claude-sonnet-5-5']);
 
-// A failed /models request (an older server's 404 included) blocks every agent.
-const failing = Promise.reject(Object.assign(new Error('Server error 404'), { status: 404 }));
-const second = open({ onSubmit: async () => { throw new Error('must not submit'); } }, failing);
-await tick();
-for (const id of ['claude-code', 'pi']) {
-  second.choose(id);
-  assert.equal(second.create.disabled, true);
-  assert.equal(second.note.textContent, 'Model list unavailable: Server error 404');
-}
-
-// Missing and empty catalogs block only their own agent.
-const third = open({}, {
-  'claude-code': { models: [], error: null },
-  pi: { models: [{ id: 'openai-codex/gpt-5.5', name: 'gpt-5.5' }], error: null },
-}, [...agents, { id: 'other', name: 'Other', default: false }]);
-third.choose('claude-code');
-assert.equal(third.note.textContent, 'The server found no models for this agent.');
-assert.equal(third.create.disabled, true);
-third.choose('other');
-assert.equal(third.note.textContent, 'The server lists no models for this agent.');
-assert.equal(third.create.disabled, true);
-third.choose('pi');
-assert.equal(third.create.disabled, false);
-third.create.dispatch('click');
-const spec = await third.result;
+// An empty catalog blocks only its own agent.
+const second = open({}, [
+  { id: 'claude-code', name: 'Claude Code', default: true, models: [], models_error: null },
+  { id: 'pi', name: 'Pi', default: false, models: [{ id: 'openai-codex/gpt-5.5', name: 'gpt-5.5' }], models_error: null },
+]);
+second.choose('claude-code');
+assert.equal(second.note.textContent, 'The server found no models for this agent.');
+assert.equal(second.create.disabled, true);
+second.choose('pi');
+assert.equal(second.create.disabled, false);
+second.create.dispatch('click');
+const spec = await second.result;
 assert.deepEqual([spec.agent, spec.model], ['pi', 'openai-codex/gpt-5.5']);
 
 // Without an agent list there is no catalog to choose from: creation is blocked.
-const fourth = open({}, Promise.resolve({}), []);
-assert.equal(fourth.agentSelect, undefined);
-assert.equal(fourth.create.disabled, true);
-fourth.dialog.close();
-assert.equal(await fourth.result, null);
+const third = open({}, []);
+assert.equal(third.agentSelect, undefined);
+assert.equal(third.create.disabled, true);
+third.dialog.close();
+assert.equal(await third.result, null);
 
 console.log('Model transport and new-session picker tests passed.');

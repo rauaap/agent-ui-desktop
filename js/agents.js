@@ -14,12 +14,15 @@
  * `ids.js` has nothing to say about it.
  */
 
+import { normalizeCatalog } from './models.js';
+
 /**
  * The rows worth showing, in the order the server registered them.
  *
  * A row has to name an agent to be one; anything without a usable `id` is
  * dropped rather than rendered as an empty option that would 422 on create.
  * `name` falls back to the id, which is at least a thing the user can look up.
+ * Each row keeps its model catalog, normalized by `normalizeCatalog`.
  */
 export function normalizeAgents(rows) {
   if (!Array.isArray(rows)) return [];
@@ -31,7 +34,7 @@ export function normalizeAgents(rows) {
     if (!id || seen.has(id)) continue;
     seen.add(id);
     const name = typeof row.name === 'string' && row.name.trim() ? row.name.trim() : id;
-    agents.push({ id, name, default: !!row.default });
+    agents.push({ id, name, default: !!row.default, ...normalizeCatalog(row) });
   }
   return agents;
 }
@@ -40,10 +43,9 @@ export function normalizeAgents(rows) {
  * The id a fresh picker should open on: the server's default, or failing that
  * the first agent it offered.
  *
- * Null for an empty list — which is not a broken server but an unreachable one,
- * or one too old for the endpoint. The dialog drops the field entirely then and
- * the create request omits `agent`, leaving the choice where it started: with
- * the server's own default.
+ * Null for an empty list — which is not a broken server but an unreachable
+ * one. The dialog drops the field entirely then and the create request omits
+ * `agent`, leaving the choice where it started: with the server's own default.
  */
 export const defaultAgent = (agents) => {
   const list = Array.isArray(agents) ? agents : [];

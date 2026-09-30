@@ -11,7 +11,6 @@
  */
 
 import { normalizeAgents } from './agents.js';
-import { normalizeModels } from './models.js';
 import { asProject, asSession, asWorktree, each, wireId } from './ids.js';
 
 import { requireToken, tokenFetch, rejectToken } from './auth.js';
@@ -76,26 +75,17 @@ function detail(text, status) {
 /* ------------------------------------------------------------------ */
 
 /**
- * The agents this server can run, in registration order:
- * `{id, name, default}` per row.
+ * The agents this server can run, in registration order, each with its model
+ * catalog: `{id, name, default, models: [{id, name}], models_error}` per row.
  *
- * The agent picker is built from this and from nothing else — see
- * `js/agents.js` for why a list kept on this side is a list that goes stale.
- * Rejects like any other call; the caller decides what an unreachable or
- * too-old server means for the picker.
+ * The agent and model pickers are built from this and from nothing else — see
+ * `js/agents.js` for why a list kept on this side is a list that goes stale,
+ * and `js/models.js` for the catalogs. Catalogs are discovered once when the
+ * server started and never refreshed, so a call is cheap and always gives the
+ * same answer until a restart. A harness whose discovery failed reports
+ * `models_error` with no models rather than failing the request.
  */
 export const listAgents = () => request('GET', '/agents').then(normalizeAgents);
-
-/**
- * Each agent's model catalog, keyed by agent id: `{models: [{id, name}],
- * error}` — see `js/models.js`.
- *
- * Discovered once when the server started and never refreshed, so a call is
- * cheap and always gives the same answer until a restart. A harness whose
- * discovery failed reports `error` with no models rather than failing the
- * request; this rejecting means the server is unreachable or predates it.
- */
-export const listModels = () => request('GET', '/models').then(normalizeModels);
 
 /* ------------------------------------------------------------------ */
 /* usage                                                              */

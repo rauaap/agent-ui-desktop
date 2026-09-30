@@ -75,7 +75,7 @@ CSP intentionally allows only same-origin connections; the supported path is
   preselect; without that preference, the server’s default is used. Nothing is
   listed here, so an agent added on the server shows up on the next refresh.
 - **Model picker** — beside the agent, the new-session dialog offers that
-  agent's models from `GET /models`, preselecting the first; switching agent
+  agent's models from its `GET /agents` row, preselecting the first; switching agent
   preselects the new agent's first. An agent without a usable catalog cannot be
   created, and the dialog says why. A session keeps its model for life; its
   catalog name is shown read-only in session settings and the tree tooltip.
@@ -361,7 +361,8 @@ own list of two, and was wrong about it: the server had grown a third (`pi`)
 that the picker never offered, and there was nothing to notice — a stale list
 does not fail, it just quietly withholds an option.
 
-`GET /agents` ends that. Each row is `{id, name, default}`, derived server-side
+`GET /agents` ends that. Each row is `{id, name, default, models,
+models_error}`, derived server-side
 from the same models that validate `POST /sessions`, so the picker cannot offer
 an agent the server would reject or miss one it would accept, and it opens on
 the default the server would have applied anyway. `agents.js` normalizes the
@@ -375,17 +376,17 @@ server default.
 The list comes along with the ordinary refresh, since it changes only when the
 server does, and it is fetched with its own `catch`: a picker is not worth
 failing the tree over. A refresh that cannot get one keeps the last list it had.
-With no list at all — an unreachable server, or one too old for the endpoint —
-the field disappears and the create request omits `agent`, which leaves the
+With no list at all — an unreachable server — the field disappears and the create request omits `agent`, which leaves the
 choice exactly where it was: with the server's default. That is deliberately not
 a hardcoded fallback list, because a hardcoded list is the thing this replaced.
 
 ### A model belongs to an agent, and to a session for life
 
-`GET /models` maps each agent id to `{models: [{id, name}], error}`. The server
-discovers every catalog once at startup and never refreshes. The dialog asks
-afresh each time it opens, and opens at once: the model field reads "Loading
-models…" and Create waits until the answer lands. A model id is opaque —
+Each `GET /agents` row carries its agent's catalog: `models`, a list of
+`{id, name}` in the server's order, and `models_error`, the reason discovery
+failed or null. The server discovers every catalog once at startup and never
+refreshes, so the dialog takes the catalogs from the agent list of the last
+refresh; there is no separate model request. A model id is opaque —
 `claude-opus-5-5`, `openai-codex/gpt-5.5` — and only means something alongside
 the agent it came from, so the picker lists the selected agent's catalog alone
 and lands on its first model, again whenever the agent changes. There is no
@@ -394,10 +395,8 @@ ranking: the server's order is the order.
 Every session is created with an explicit `model`. There is no "default" entry
 and no fallback to letting the harness choose: broken discovery is the server's
 to fix, and a client that worked around it would hide the breakage. So Create is
-disabled for an agent, with the reason beside the picker, when the `/models`
-request failed (an older server's 404 included), when the catalog has no entry
-for the agent, when its entry carries an `error`, or when its `models` list is
-empty. Other agents stay usable. With no agent list at all there is no catalog
+disabled for an agent, with the reason beside the picker, when its row carries
+a `models_error` or when its `models` list is empty. Other agents stay usable. With no agent list at all there is no catalog
 to take a model from, so creation is blocked then too.
 
 The create request runs with the dialog still open. A 400 (a model outside the
@@ -407,8 +406,8 @@ with every selection intact; no other model is substituted.
 Every session row carries `model`: the id it was created with, or null for a
 session older than the field, which shows no model at all. Labels use the
 catalog name while the agent still lists the id, and the id itself otherwise;
-the catalogs for that ride along with the ordinary refresh and keep their last
-answer when a read fails. There is no switching mid-session — `PATCH` rejects
+the catalogs for that come with the agent list, and keep their last answer
+when a read fails. There is no switching mid-session — `PATCH` rejects
 `model` and turns take none — so it is displayed read-only and never sent again.
 
 ### A subscription is not an agent
@@ -545,7 +544,7 @@ client's `LineDiffTest`, `MarkdownTest` and `WorktreeTest`:
 ```sh
 node test/run.js          # any JS runtime
 node test/auth-tests.js   # token transport, mocked fetch/WebSocket
-node test/model-api-tests.js  # /models, POST /sessions model, the picker
+node test/model-api-tests.js  # /agents catalogs, POST /sessions model, the picker
 ```
 
 or open `test/index.html` in a browser, which needs nothing installed at all.

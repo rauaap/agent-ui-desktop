@@ -982,15 +982,13 @@ export function usageDialog(load) {
 /* ------------------------------------------------------------------ */
 
 /**
- * The model select for the new-session dialog, kept scoped to `agentSelect`.
- * `catalogs` may still be a promise. `blocked()` is the reason Create must stay
- * disabled, or null, and `onChange` fires whenever that may have changed.
+ * The model select for the new-session dialog, kept scoped to `agentSelect`
+ * and listing the selected one of `agents`' catalogs. `blocked()` is the reason
+ * Create must stay disabled, or null, and `onChange` fires whenever that may
+ * have changed.
  */
-function modelPicker(body, agentSelect, catalogs, onChange) {
-  // Null is "loading" to modelChoices, so a caller that passed nothing gets
-  // the unavailable reason instead of a wait that never ends.
-  let known = catalogs instanceof Promise ? null : (catalogs ?? new Error('not requested'));
-  let choices = modelChoices(known, agentSelect.value);
+function modelPicker(body, agentSelect, agents, onChange) {
+  let choices;
   const wrap = el('div', 'field');
   wrap.appendChild(el('label', null, 'Model'));
   const select = el('select');
@@ -998,35 +996,25 @@ function modelPicker(body, agentSelect, catalogs, onChange) {
   wrap.append(select, note);
   body.appendChild(wrap);
 
-  const paint = (keep) => {
-    choices = modelChoices(known, agentSelect.value);
-    const current = keep ? select.value : null;
+  // A new agent means a new catalog: start over from its first model.
+  const paint = () => {
+    choices = modelChoices(agents.find((agent) => agent.id === agentSelect.value));
     select.replaceChildren();
     for (const model of choices.models) {
       const option = el('option', null, model.name === model.id ? model.id : `${model.name} · ${model.id}`);
       option.value = model.id;
       select.appendChild(option);
     }
-    select.value = pickModel(choices, current) ?? '';
+    select.value = pickModel(choices) ?? '';
     select.disabled = !choices.models.length;
-    // Loading is a wait, not a fault; everything else blocking is one.
-    note.className = choices.blocked && known !== null ? 'dlg-note warn' : 'dlg-note';
+    note.className = choices.blocked ? 'dlg-note warn' : 'dlg-note';
     note.textContent = choices.blocked ?? '';
     note.style.display = choices.blocked ? '' : 'none';
     onChange();
   };
 
-  // A new agent means a new catalog: start over from its first model.
-  agentSelect.addEventListener('change', () => paint(false));
-  paint(false);
-  if (catalogs instanceof Promise) {
-    catalogs
-      .then((value) => value, (error) => (error instanceof Error ? error : new Error(String(error))))
-      .then((value) => {
-        known = value;
-        paint(true);
-      });
-  }
+  agentSelect.addEventListener('change', paint);
+  paint();
   return { select, blocked: () => choices.blocked };
 }
 
@@ -1056,21 +1044,19 @@ const NEW_WORKTREE = '\0new';
  * carried across would be one the server rejects. There is no "default"
  * entry — every session is created with an explicit model — so an agent whose
  * catalog is missing, failed or empty cannot be created at all, and the reason
- * is shown beside the picker. The catalogs arrive while the dialog is already
- * open; Create waits for them. With no agent list there is no catalog to pick
+ * is shown beside the picker. With no agent list there is no catalog to pick
  * from either, so that blocks creation too.
  *
  * @param {object} project
  * @param {object[]} worktrees from `GET /worktrees?project_path=…`
- * @param {object[]} agents from `GET /agents`, already normalized
+ * @param {object[]} agents from `GET /agents`, already normalized, each
+ *   carrying its model catalog
  * @param {{
  *   onCreateWorktree?: (branchSeed: string) => Promise<object|null>,
  *   onSubmit?: (spec: object) => Promise<object>,
  * }} handlers
- * @param {Promise<object>|object|null} catalogs from `GET /models`, already
- *   normalized; a rejection blocks every agent
  */
-export function newSessionDialog(project, worktrees = [], agents = [], handlers = {}, catalogs = null) {
+export function newSessionDialog(project, worktrees = [], agents = [], handlers = {}) {
   let nameInput;
   let agentSelect = null;
   let models = null;
@@ -1087,7 +1073,7 @@ export function newSessionDialog(project, worktrees = [], agents = [], handlers 
         hint: 'Suggestions are not checked for uniqueness — duplicates are fine.',
       });
 
-      // No list means an unreachable or too-old server, not a server with no
+      // No list means an unreachable server, not a server with no
       // agents. Without an agent there is no catalog to take a model from, and
       // leaving both to the server is exactly the fallback models rule out.
       if (!agents.length) {
@@ -1107,7 +1093,7 @@ export function newSessionDialog(project, worktrees = [], agents = [], handlers 
         agentSelect.value = preferredAgent(agents);
         wrap.appendChild(agentSelect);
         body.appendChild(wrap);
-        models = modelPicker(body, agentSelect, catalogs, gate);
+        models = modelPicker(body, agentSelect, agents, gate);
       }
 
       const sandboxField = el('div');

@@ -68,10 +68,8 @@ export class Sidebar {
     this.sessions = [];
     /** @type {Map<string, object>} worktrees by id, for the badge's tooltip. */
     this.worktrees = new Map();
-    /** @type {object[]} agents from `GET /agents`, for the tooltip's label. */
+    /** @type {object[]} agents from `GET /agents`, for the tooltip's agent and model names. */
     this.agents = [];
-    /** @type {object} catalogs from `GET /models`, for the tooltip's model name. */
-    this.catalogs = {};
     this.activeId = null;
     this.selectedIds = new Set();
     this.selectionAnchor = null;
@@ -93,12 +91,11 @@ export class Sidebar {
     this.root.addEventListener('scroll', () => this.closeMenu());
   }
 
-  setData(projects, sessions, worktrees = [], agents = [], catalogs = {}) {
+  setData(projects, sessions, worktrees = [], agents = []) {
     this.projects = projects;
     this.sessions = sessions;
     this.worktrees = new Map(worktrees.map((w) => [String(w.id), w]));
     this.agents = agents;
-    this.catalogs = catalogs;
     this.render();
   }
 
@@ -317,7 +314,7 @@ export class Sidebar {
     // registers shows, rather than nothing.
     const agent = agentName(this.agents, session.agent);
     // A legacy session has no model and shows none.
-    const model = modelLabel(this.catalogs, session.agent, session.model);
+    const model = modelLabel(this.agents, session.agent, session.model);
     item.title = `${session.name}\n#${id}\n${agent}${model ? ` · ${model}` : ''}`
       + (where ? `\n${where}` : '')
       + (inArchive ? `\nArchived ${filedLabel(session.archived_at)}` : '');
