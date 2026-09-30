@@ -212,13 +212,17 @@ export const listSessions = () => request('GET', '/sessions').then(each(asSessio
  * answers 400 for an id not in the agent's catalog and 503 when that catalog
  * failed to load. The choice is fixed for the session's lifetime: there is no
  * `PATCH` for it.
+ *
+ * `reasoningLevel` is null for the harness's own default, or one of the
+ * model's `reasoning_levels`; anything else is a 400.
  */
-export const createSession = (name, projectPath, agent, model, worktreeId = null, sandbox) =>
+export const createSession = (name, projectPath, agent, model, reasoningLevel, worktreeId = null, sandbox) =>
   request('POST', '/sessions', {
     name,
     project_path: projectPath,
     ...(agent ? { agent } : {}),
     model,
+    reasoning_level: reasoningLevel,
     worktree_id: wireId(worktreeId),
     ...(typeof sandbox === 'boolean' ? { sandbox } : {}),
   }).then(asSession);
@@ -235,6 +239,15 @@ export const setAutoApprove = (id, write, command, interAgent) =>
     auto_approve_command: command,
     auto_approve_inter_agent_communication: interAgent,
   }).then(asSession);
+
+/**
+ * Set the session's reasoning level to one of its model's `reasoning_levels`,
+ * from the next turn on; a running turn keeps the level it started with. There
+ * is no way back to the harness default once a level is set. The server
+ * broadcasts `reasoning_level` to every subscriber.
+ */
+export const setReasoningLevel = (id, reasoning_level) =>
+  request('PATCH', `/sessions/${id}`, { reasoning_level }).then(asSession);
 
 /**
  * Archive or unarchive one session. The same partial `PATCH` as the two above,

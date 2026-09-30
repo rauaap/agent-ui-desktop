@@ -79,6 +79,10 @@ CSP intentionally allows only same-origin connections; the supported path is
   preselects the new agent's first. An agent without a usable catalog cannot be
   created, and the dialog says why. A session keeps its model for life; its
   catalog name is shown read-only in session settings and the tree tooltip.
+- **Reasoning level** — under the model, the new-session dialog offers
+  "Default" (the harness decides) and that model's own reasoning levels; it is
+  hidden for a model with none. Session settings show the current level and can
+  change it to another of the model's levels from the next turn.
 - **Worktrees** — a worktree is its own thing, not something a session owns: it
   is created on its own, several sessions can share one, and it outlives the
   sessions that used it. The new-session dialog picks one — "project directory"
@@ -383,7 +387,7 @@ a hardcoded fallback list, because a hardcoded list is the thing this replaced.
 ### A model belongs to an agent, and to a session for life
 
 Each `GET /agents` row carries its agent's catalog: `models`, a list of
-`{id, name}` in the server's order, and `models_error`, the reason discovery
+`{id, name, reasoning_levels}` in the server's order, and `models_error`, the reason discovery
 failed or null. The server discovers every catalog once at startup and never
 refreshes, so the dialog takes the catalogs from the agent list of the last
 refresh; there is no separate model request. A model id is opaque —
@@ -409,6 +413,24 @@ catalog name while the agent still lists the id, and the id itself otherwise;
 the catalogs for that come with the agent list, and keep their last answer
 when a read fails. There is no switching mid-session — `PATCH` rejects
 `model` and turns take none — so it is displayed read-only and never sent again.
+
+### A reasoning level belongs to a model
+
+Each model's `reasoning_levels` is the harness's own vocabulary in the
+harness's order — `low`…`max` for Claude Code, `off`…`max` for Pi — and empty
+for a model with no choice. Nothing here maps, ranks or hardcodes them. The
+new-session dialog offers "Default" first, which sends `reasoning_level: null`
+and leaves the level to the harness, then exactly the selected model's levels;
+it resets to "Default" whenever the model changes and is hidden when the list
+is empty.
+
+Every session row carries `reasoning_level`, null reading as "Default". Session
+settings change it with a `PATCH` to another of the model's levels, taking
+effect from the next turn. "Default" is offered there only while the session
+has no level: the server cannot clear one once set. When the catalog no longer
+lists the session's model, the level is shown read-only. The server broadcasts
+`reasoning_level` events to every socket on a change, but does not replay them
+on connect, so REST refreshes also carry the field for the open session.
 
 ### A subscription is not an agent
 
@@ -544,7 +566,7 @@ client's `LineDiffTest`, `MarkdownTest` and `WorktreeTest`:
 ```sh
 node test/run.js          # any JS runtime
 node test/auth-tests.js   # token transport, mocked fetch/WebSocket
-node test/model-api-tests.js  # /agents catalogs, POST /sessions model, the picker
+node test/model-api-tests.js  # /agents catalogs, model and reasoning pickers
 ```
 
 or open `test/index.html` in a browser, which needs nothing installed at all.

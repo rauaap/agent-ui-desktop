@@ -91,6 +91,9 @@ function blankState(id) {
     // The model chosen at creation, or null for the agent's default. Fixed for
     // the session's lifetime.
     model: null,
+    // The reasoning level, or null while the harness picks its own default.
+    // Changeable between turns; arrives as `reasoning_level` events.
+    reasoningLevel: null,
     status: 'idle',
     // When the server filed this session away, or null while it is live.
     // Server state like `status`, and arriving the same way: on connect, and
@@ -209,6 +212,7 @@ export class Store {
       worktreeId: live.worktreeId,
       agent: live.agent,
       model: live.model,
+      reasoningLevel: live.reasoningLevel,
       status: live.status,
       archivedAt: live.archivedAt,
       autoApproveWrite: live.autoApproveWrite,
@@ -254,9 +258,9 @@ export class Store {
 
   /** Apply one server event, notifying subscribers of what changed. */
   apply(id, event) {
-    // Settings are never replayed history. Apply immediately to both copies so
-    // a dropped replay cannot lose a live settings update.
-    if (event.type === 'settings') {
+    // Settings and reasoning levels are never replayed history. Apply
+    // immediately to both copies so a dropped replay cannot lose a live update.
+    if (event.type === 'settings' || event.type === 'reasoning_level') {
       const changes = reduce(this.session(id), event);
       const shadow = this.replays.get(id);
       if (shadow) reduce(shadow, event);
@@ -361,6 +365,11 @@ export function reduce(state, event) {
 
     case 'renamed':
       if (event.name) state.name = event.name;
+      changes.push({ op: 'meta' });
+      break;
+
+    case 'reasoning_level':
+      state.reasoningLevel = event.reasoning_level;
       changes.push({ op: 'meta' });
       break;
 

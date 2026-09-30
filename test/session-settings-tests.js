@@ -213,17 +213,18 @@ await test('sandbox API: creation preserves false and numeric worktree ids; PATC
     return { ok: true, text: async () => JSON.stringify({ id: 7, sandbox: false }) };
   };
   try {
-    equal((await api.createSession('name', '/app', 'pi', 'a/m', '3', false)).sandbox, false);
+    equal((await api.createSession('name', '/app', 'pi', 'a/m', null, '3', false)).sandbox, false);
     await api.createSession('name', '/app', 'pi', 'a/m');
     await api.setSandbox('7', false);
     await api.renameSession('7', 'renamed');
     await api.setAutoApprove('7', true, false);
     await api.setAutoApprove('7', undefined, true);
-    await api.createSession('name', '/app', 'pi', 'a/m', null, true);
-    await api.createSession('name', '/app', 'claude-code', 'claude-opus-5-5', '3', false);
+    await api.createSession('name', '/app', 'pi', 'a/m', null, null, true);
+    await api.createSession('name', '/app', 'claude-code', 'claude-opus-5-5', 'high', '3', false);
     await api.setAutoApprove('7', undefined, undefined, true);
     equal(calls[0].body, {
-      name: 'name', project_path: '/app', agent: 'pi', model: 'a/m', worktree_id: 3, sandbox: false,
+      name: 'name', project_path: '/app', agent: 'pi', model: 'a/m', reasoning_level: null, worktree_id: 3,
+      sandbox: false,
     });
     equal('sandbox' in calls[1].body, false);
     equal(calls[2], { path: '/sessions/7', method: 'PATCH', body: { sandbox: false } });
@@ -232,7 +233,8 @@ await test('sandbox API: creation preserves false and numeric worktree ids; PATC
     equal(calls[5].body, { auto_approve_command: true });
     equal(calls[6].body.sandbox, true);
     equal(calls[7].body, {
-      name: 'name', project_path: '/app', agent: 'claude-code', model: 'claude-opus-5-5', worktree_id: 3, sandbox: false,
+      name: 'name', project_path: '/app', agent: 'claude-code', model: 'claude-opus-5-5',
+      reasoning_level: 'high', worktree_id: 3, sandbox: false,
     });
     equal(calls[8].body, { auto_approve_inter_agent_communication: true });
   } finally { globalThis.fetch = original; }

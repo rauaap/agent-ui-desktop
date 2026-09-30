@@ -2,10 +2,15 @@
  * The models each agent can run, for the new-session picker.
  *
  * Every row of `GET /agents` carries its own catalog: `models`, a list of
- * `{id, name}` in the server's order, and `models_error`, the reason discovery
+ * `{id, name, reasoning_levels}` in the server's order, and `models_error`, the reason discovery
  * failed or null. The server discovers every catalog once at startup and never
  * again, so there is nothing to refresh here either: a picker takes whatever
  * the agent list it was given says.
+ *
+ * Each model also lists its `reasoning_levels`: the harness's own vocabulary in
+ * the harness's order (`low`…`max` for Claude, `off`…`max` for Pi), empty when
+ * the model offers no choice. There is no default level in the catalog: a
+ * session without one lets the harness decide, which reads as "Default".
  *
  * A model id is not ours in the same way an agent id is not: `claude-opus-5-5`,
  * `openai-codex/gpt-5.5` — opaque strings the server validates against the
@@ -20,7 +25,7 @@
 
 /**
  * One agent row's catalog, as `{models, models_error}`: `models` a list of
- * `{id, name}` and `models_error` a string or null.
+ * `{id, name, reasoning_levels}` and `models_error` a string or null.
  *
  * Rows without a usable `id` are dropped, as `normalizeAgents` drops agents —
  * an option the server would reject is only a way to fail on create. A catalog
@@ -41,7 +46,8 @@ export function normalizeCatalog(row) {
     if (!id.trim() || seen.has(id)) continue;
     seen.add(id);
     const name = typeof model.name === 'string' && model.name.trim() ? model.name.trim() : id;
-    models.push({ id, name });
+    const levels = model.reasoning_levels.filter((level) => typeof level === 'string' && level);
+    models.push({ id, name, reasoning_levels: [...new Set(levels)] });
   }
   return { models: error ? [] : models, models_error: error };
 }
@@ -64,6 +70,18 @@ export function modelChoices(agent) {
 export function pickModel(choices) {
   return choices.models.length ? choices.models[0].id : null;
 }
+
+/**
+ * The reasoning levels a session can be set to: its model's, while its agent's
+ * catalog still lists that model, else none.
+ */
+export function reasoningLevels(agents, agent, id) {
+  const entry = agents.find((row) => row.id === agent);
+  return entry?.models.find((model) => model.id === id)?.reasoning_levels ?? [];
+}
+
+/** How a session's reasoning level reads: the level itself, or "Default" for null. */
+export const reasoningLabel = (level) => level ?? 'Default';
 
 /**
  * How a session's model reads: its name in its agent's catalog while that

@@ -1,6 +1,8 @@
 import { normalizeAgents } from '../js/agents.js';
-import { modelChoices, modelLabel, normalizeCatalog, pickModel } from '../js/models.js';
-import { Store, toMarkdown } from '../js/store.js';
+import {
+  modelChoices, modelLabel, normalizeCatalog, pickModel, reasoningLabel, reasoningLevels,
+} from '../js/models.js';
+import { Store, reduce, toMarkdown } from '../js/store.js';
 
 export const results = [];
 function test(name, fn) {
@@ -20,13 +22,22 @@ function equal(actual, expected) {
 const WIRE = [
   {
     id: 'claude-code', name: 'Claude Code', default: true,
-    models: [{ id: 'claude-opus-5-5', name: 'Opus 5.5' }], models_error: null,
+    models: [
+      { id: 'claude-opus-5-5', name: 'Opus 5.5', reasoning_levels: ['low', 'medium', 'high', 'xhigh', 'max'] },
+      { id: 'claude-haiku-4-5-20251001', name: 'Haiku 4.5', reasoning_levels: [] },
+    ],
+    models_error: null,
   },
   {
     id: 'pi', name: 'Pi', default: false,
-    models: [{ id: 'openai-codex/gpt-5.5', name: 'gpt-5.5' }], models_error: null,
+    models: [{
+      id: 'openai-codex/gpt-5.5', name: 'gpt-5.5',
+      reasoning_levels: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'],
+    }],
+    models_error: null,
   },
 ];
+const m = (id, name = id) => ({ id, name, reasoning_levels: [] });
 const agent = (id, models, error = null) => ({ id, name: id, default: false, models, models_error: error });
 
 test('models: the documented catalog survives normalization unchanged', () => {
@@ -36,11 +47,41 @@ test('models: the documented catalog survives normalization unchanged', () => {
 test('models: ids stay opaque; unusable and duplicate rows are dropped', () => {
   equal(normalizeCatalog({
     models: [
-      { id: ' spaced/id ', name: '' }, { id: '' }, { name: 'no id' }, null,
+      { id: ' spaced/id ', name: '', reasoning_levels: [] }, { id: '' }, { name: 'no id' }, null,
       { id: ' spaced/id ', name: 'dup' }, { id: 7, name: 'number' },
     ],
     models_error: null,
-  }), { models: [{ id: ' spaced/id ', name: ' spaced/id ' }], models_error: null });
+  }), { models: [{ id: ' spaced/id ', name: ' spaced/id ', reasoning_levels: [] }], models_error: null });
+});
+
+test('models: reasoning levels keep the harness order and vocabulary', () => {
+  equal(normalizeCatalog({
+    models: [{ id: 'x', name: 'X', reasoning_levels: ['max', 'off', '', 7, 'max', 'high'] }],
+    models_error: null,
+  }).models[0].reasoning_levels, ['max', 'off', 'high']);
+});
+
+test('models: a session offers its own model’s levels, and none once it is gone', () => {
+  const agents = normalizeAgents(WIRE);
+  equal(reasoningLevels(agents, 'claude-code', 'claude-opus-5-5'), ['low', 'medium', 'high', 'xhigh', 'max']);
+  equal(reasoningLevels(agents, 'claude-code', 'claude-haiku-4-5-20251001'), []);
+  equal(reasoningLevels(agents, 'pi', 'claude-opus-5-5'), []);
+  equal(reasoningLevels(agents, 'gone', 'x'), []);
+  equal(reasoningLabel(null), 'Default');
+  equal(reasoningLabel('xhigh'), 'xhigh');
+});
+
+test('models: reasoning_level events set the level, replay or not', () => {
+  const state = { reasoningLevel: null };
+  equal(reduce(state, { type: 'reasoning_level', reasoning_level: 'high' }), [{ op: 'meta' }]);
+  equal(state.reasoningLevel, 'high');
+  const store = new Store();
+  store.setMeta('1', { reasoningLevel: 'low' });
+  store.beginReplay('1');
+  equal(store.replays.get('1').reasoningLevel, 'low');
+  store.apply('1', { type: 'reasoning_level', reasoning_level: 'max' });
+  equal(store.session('1').reasoningLevel, 'max');
+  equal(store.replays.get('1').reasoningLevel, 'max');
 });
 
 test('models: a failed catalog keeps its error and offers no models', () => {
@@ -55,7 +96,7 @@ test('models: a failed catalog keeps its error and offers no models', () => {
 });
 
 test('models: choices are scoped to the selected agent and preselect its first', () => {
-  const pi = modelChoices(agent('pi', [{ id: 'b/two', name: 'two' }, { id: 'a/one', name: 'one' }]));
+  const pi = modelChoices(agent('pi', [m('b/two', 'two'), m('a/one', 'one')]));
   equal(pi.blocked, null);
   // Server order, no ranking.
   equal(pickModel(pi), 'b/two');
@@ -66,7 +107,7 @@ test('models: every unusable catalog blocks with a reason and offers nothing', (
   const [pi, empty, blank] = normalizeAgents([
     agent('pi', [], 'boom'),
     agent('empty', []),
-    agent('blank', [{ id: 'x' }], ''),
+    agent('blank', [m('x')], ''),
   ]);
   const cases = [
     [modelChoices(pi), 'Model list unavailable: boom'],

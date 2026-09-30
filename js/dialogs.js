@@ -6,7 +6,7 @@
  */
 
 import { preferredAgent } from './agents.js';
-import { modelChoices, pickModel } from './models.js';
+import { modelChoices, pickModel, reasoningLabel } from './models.js';
 import { copyWithFeedback, idChip } from './clipboard.js';
 import { sandboxPathEntries, isExactOverride } from './sandbox-paths.js';
 import {
@@ -983,9 +983,10 @@ export function usageDialog(load) {
 
 /**
  * The model select for the new-session dialog, kept scoped to `agentSelect`
- * and listing the selected one of `agents`' catalogs. `blocked()` is the reason
- * Create must stay disabled, or null, and `onChange` fires whenever that may
- * have changed.
+ * and listing the selected one of `agents`' catalogs, with a reasoning select
+ * under it for the selected model. `blocked()` is the reason Create must stay
+ * disabled, or null, `reasoning()` the chosen level or null for the harness
+ * default, and `onChange` fires whenever the blocking reason may have changed.
  */
 function modelPicker(body, agentSelect, agents, onChange) {
   let choices;
@@ -995,6 +996,29 @@ function modelPicker(body, agentSelect, agents, onChange) {
   const note = el('div', 'dlg-note');
   wrap.append(select, note);
   body.appendChild(wrap);
+
+  const reasoningWrap = el('div', 'field');
+  reasoningWrap.appendChild(el('label', null, 'Reasoning'));
+  const reasoning = el('select');
+  reasoningWrap.appendChild(reasoning);
+  body.appendChild(reasoningWrap);
+
+  // Every model starts on "Default", which sends null and leaves the level to
+  // the harness; the rest is exactly that model's list. No list, no field.
+  const paintReasoning = () => {
+    const model = choices.models.find((row) => row.id === select.value);
+    const levels = model ? model.reasoning_levels : [];
+    const unset = el('option', null, reasoningLabel(null));
+    unset.value = '';
+    reasoning.replaceChildren(unset);
+    for (const level of levels) {
+      const option = el('option', null, level);
+      option.value = level;
+      reasoning.appendChild(option);
+    }
+    reasoning.value = '';
+    reasoningWrap.style.display = levels.length ? '' : 'none';
+  };
 
   // A new agent means a new catalog: start over from its first model.
   const paint = () => {
@@ -1010,12 +1034,14 @@ function modelPicker(body, agentSelect, agents, onChange) {
     note.className = choices.blocked ? 'dlg-note warn' : 'dlg-note';
     note.textContent = choices.blocked ?? '';
     note.style.display = choices.blocked ? '' : 'none';
+    paintReasoning();
     onChange();
   };
 
   agentSelect.addEventListener('change', paint);
+  select.addEventListener('change', paintReasoning);
   paint();
-  return { select, blocked: () => choices.blocked };
+  return { select, blocked: () => choices.blocked, reasoning: () => reasoning.value || null };
 }
 
 /** The "New worktree…" entry's value. Not an id, so it can never collide. */
@@ -1046,6 +1072,11 @@ const NEW_WORKTREE = '\0new';
  * catalog is missing, failed or empty cannot be created at all, and the reason
  * is shown beside the picker. With no agent list there is no catalog to pick
  * from either, so that blocks creation too.
+ *
+ * Under the model sits its reasoning level: "Default", which leaves the level
+ * to the harness, then that model's `reasoning_levels` as the catalog lists
+ * them. It resets to "Default" whenever the model changes, and is hidden for a
+ * model with no levels.
  *
  * @param {object} project
  * @param {object[]} worktrees from `GET /worktrees?project_path=…`
@@ -1203,6 +1234,7 @@ export function newSessionDialog(project, worktrees = [], agents = [], handlers 
         name,
         agent: agentSelect.value,
         model: models.select.value,
+        reasoningLevel: models.reasoning(),
         worktreeId: picked || null,
         ...(supportsSandbox(agentSelect.value) ? { sandbox: sandboxToggle.checked } : {}),
       };
@@ -1324,17 +1356,24 @@ export function createWorktreeDialog(
 }
 
 /**
- * Session settings: rename, auto-approve toggles, archive, detach, delete.
- * Sandbox saves immediately through its dedicated handler; Cancel does not undo
- * a confirmed sandbox change. The control subscribes to live session metadata.
+ * Session settings: rename, reasoning level, auto-approve toggles, archive,
+ * detach, delete. Sandbox saves immediately through its dedicated handler;
+ * Cancel does not undo a confirmed sandbox change. The control subscribes to
+ * live session metadata.
  *
- * Resolves `{name, autoApproveWrite, autoApproveCommand, autoApproveInterAgent,
- * archived, detached, deleted}`, or null.
+ * The reasoning select offers the session model's `reasoning_levels`, from
+ * `handlers.reasoningLevels`. "Default" appears only while the session has no
+ * level: once one is set the server cannot clear it again. With no levels to
+ * offer, the current level is shown read-only.
+ *
+ * Resolves `{name, reasoningLevel, autoApproveWrite, autoApproveCommand,
+ * autoApproveInterAgent, archived, detached, deleted}`, or null.
  *
  * @param {object} state the store's session state
  */
 export function sessionSettingsDialog(state, handlers = {}) {
   let nameInput;
+  let reasoningSelect = null;
   let writeToggle;
   let commandToggle;
   let interAgentToggle;
@@ -1359,7 +1398,24 @@ export function sessionSettingsDialog(state, handlers = {}) {
       // older than model selection have none, and show none.
       const model = handlers.modelLabel?.(state) ?? state.model;
       if (model) detail(ids, 'Model', model);
+      const levels = handlers.reasoningLevels?.(state) ?? [];
+      if (!levels.length) detail(ids, 'Reasoning', reasoningLabel(state.reasoningLevel));
       body.appendChild(ids);
+
+      if (levels.length) {
+        const wrap = el('div', 'field');
+        wrap.appendChild(el('label', null, 'Reasoning'));
+        reasoningSelect = el('select');
+        const offered = state.reasoningLevel === null ? [null, ...levels] : levels;
+        for (const level of offered) {
+          const option = el('option', null, reasoningLabel(level));
+          option.value = level ?? '';
+          reasoningSelect.appendChild(option);
+        }
+        reasoningSelect.value = state.reasoningLevel ?? '';
+        wrap.append(reasoningSelect, el('div', 'dlg-note', 'Applies from the next turn.'));
+        body.appendChild(wrap);
+      }
 
       if (supportsSandbox(state.agent)) {
         const sandboxToggle = toggle(body, 'Sandbox',
@@ -1473,6 +1529,7 @@ export function sessionSettingsDialog(state, handlers = {}) {
       if (!name && !deleted) throw new Error('The name cannot be empty');
       return {
         name,
+        reasoningLevel: reasoningSelect ? reasoningSelect.value || null : state.reasoningLevel,
         autoApproveWrite: writeToggle.checked,
         autoApproveCommand: commandToggle.checked,
         autoApproveInterAgent: interAgentToggle.checked,

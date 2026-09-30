@@ -10,7 +10,7 @@
 import * as api from './api.js';
 import { authBlocked, showTokenPrompt } from './auth.js';
 import { agentPreference, setAgentPreference } from './agents.js';
-import { modelLabel } from './models.js';
+import { modelLabel, reasoningLevels } from './models.js';
 import { partition } from './archive.js';
 import { copyText } from './clipboard.js';
 import { SessionDirectory } from './inter-agent.js';
@@ -165,6 +165,7 @@ const metaFrom = (session, project) => ({
   worktreeId: session.worktree_id ?? null,
   agent: session.agent,
   model: session.model ?? null,
+  reasoningLevel: session.reasoning_level,
   status: session.status,
   archivedAt: session.archived_at ?? null,
   ...settingsMeta(session),
@@ -182,6 +183,8 @@ const locationMetaFrom = (session, project) => ({
   worktreeId: session.worktree_id ?? null,
   // Fixed at creation, so REST can never contradict the socket about it.
   model: session.model ?? null,
+  // Changes are broadcast but not replayed on connect, so REST keeps it current.
+  reasoningLevel: session.reasoning_level,
 });
 
 /**
@@ -716,7 +719,8 @@ async function createSession(project) {
     onSubmit: async (spec) => {
       try {
         return await api.createSession(
-          spec.name, project.path, spec.agent, spec.model, spec.worktreeId, spec.sandbox,
+          spec.name, project.path, spec.agent, spec.model, spec.reasoningLevel, spec.worktreeId,
+          spec.sandbox,
         );
       } catch (error) {
         // A 404 means the picker offered a worktree that has since gone; a
@@ -766,6 +770,7 @@ async function openSessionSettings(id) {
   const state = store.session(id);
   const before = {
     name: state.name,
+    reasoningLevel: state.reasoningLevel,
     write: state.autoApproveWrite,
     command: state.autoApproveCommand,
     interAgent: state.autoApproveInterAgent,
@@ -775,6 +780,7 @@ async function openSessionSettings(id) {
     getState: () => store.has(id) ? store.session(id) : { ...state, connected: false },
     subscribe: (paint) => store.subscribe(id, paint),
     modelLabel: (session) => modelLabel(agents, session.agent, session.model),
+    reasoningLevels: (session) => reasoningLevels(agents, session.agent, session.model),
     onError: fail,
     saveSandbox: async (value) => {
       try {
@@ -833,6 +839,9 @@ async function openSessionSettings(id) {
     if (result.name && result.name !== before.name) {
       await patchSettings(() => api.renameSession(id, result.name));
     }
+    if (result.reasoningLevel !== before.reasoningLevel) {
+      await api.setReasoningLevel(id, result.reasoningLevel);
+    }
     if (result.autoApproveWrite !== before.write
         || result.autoApproveCommand !== before.command
         || result.autoApproveInterAgent !== before.interAgent) {
@@ -857,9 +866,9 @@ async function openSessionSettings(id) {
       fail(error);
     }
   }
-  // The server broadcasts `renamed`, `settings` and `archived` to every
-  // subscriber, so the store updates itself; this is for the tree, which has no
-  // socket. In the `finally` position because a rejected archive still leaves
+  // The server broadcasts `renamed`, `reasoning_level`, `settings` and
+  // `archived` to every subscriber, so the store updates itself; this is for
+  // the tree, which has no socket. In the `finally` position because a rejected archive still leaves
   // whatever was applied before it to be shown.
   await refresh();
 }
