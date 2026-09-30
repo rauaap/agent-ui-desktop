@@ -10,6 +10,7 @@
 import * as api from './api.js';
 import { authBlocked, showTokenPrompt } from './auth.js';
 import { agentPreference, setAgentPreference } from './agents.js';
+import { modelLabel } from './models.js';
 import { partition } from './archive.js';
 import { copyText } from './clipboard.js';
 import { SessionDirectory } from './inter-agent.js';
@@ -52,6 +53,9 @@ let worktrees = [];
 const permissionUpdates = new Map();
 /** The agents `GET /agents` last offered — see `js/agents.js`. */
 let agents = [];
+// `GET /models`, for session labels. Fixed from server startup, so a failed
+// read keeps whatever was last known rather than dropping names.
+let catalogs = {};
 
 /* ------------------------------------------------------------------ */
 /* toasts                                                             */
@@ -163,6 +167,7 @@ const metaFrom = (session, project) => ({
   workingDir: session.working_dir,
   worktreeId: session.worktree_id ?? null,
   agent: session.agent,
+  model: session.model ?? null,
   status: session.status,
   archivedAt: session.archived_at ?? null,
   ...settingsMeta(session),
@@ -178,6 +183,8 @@ const locationMetaFrom = (session, project) => ({
   projectPath: project?.path ?? '',
   workingDir: session.working_dir,
   worktreeId: session.worktree_id ?? null,
+  // Fixed at creation, so REST can never contradict the socket about it.
+  model: session.model ?? null,
 });
 
 /**
@@ -228,7 +235,7 @@ function acceptSessions(sessions, fullRefresh, since, requestId, connection) {
     });
   }
 
-  if (fullRefresh) sidebar.setData(projects, sessions, worktrees, agents);
+  if (fullRefresh) sidebar.setData(projects, sessions, worktrees, agents, catalogs);
   else sidebar.setSessions(sessions);
   sidebar.setActive(workspace.activeId);
   workspace.pruneMissing(new Set(sessionsById.keys()));
@@ -273,11 +280,12 @@ async function refresh() {
     // startup — and it fails on its own, keeping whatever it last knew: an
     // agent picker is not worth failing the tree over, and a server too old for
     // the endpoint should still list its projects.
-    const [nextProjects, sessions, nextWorktrees, nextAgents] = await Promise.all([
+    const [nextProjects, sessions, nextWorktrees, nextAgents, nextCatalogs] = await Promise.all([
       api.listProjects(),
       api.listSessions(),
       api.listWorktrees(),
       api.listAgents().catch(() => agents),
+      api.listModels().catch(() => catalogs),
     ]);
     // A faster session-only poll must not discard this refresh's project data.
     if (requestId >= projectsAccepted) {
@@ -285,9 +293,10 @@ async function refresh() {
       projects = nextProjects;
       worktrees = nextWorktrees;
       agents = nextAgents;
+      catalogs = nextCatalogs;
     }
     if (!acceptSessions(sessions, true, since, requestId, connection)) {
-      sidebar.setData(projects, [...sessionsById.values()], worktrees, agents);
+      sidebar.setData(projects, [...sessionsById.values()], worktrees, agents, catalogs);
     }
     return { projects, sessions, worktrees };
   } catch (error) {
@@ -704,16 +713,32 @@ function reportWorktreeKept(worktree, detail) {
 }
 
 async function createSession(project) {
-  const spec = await newSessionDialog(project, worktreesFor(project), agents, {
+  // Asked for afresh rather than taken from the last refresh: the picker must
+  // reflect what this server reports now, failure included. The dialog opens at
+  // once and holds Create until the answer lands.
+  const models = api.listModels();
+  models.then((next) => { catalogs = next; }, () => {});
+  const session = await newSessionDialog(project, worktreesFor(project), agents, {
     // Opened from inside the dialog, on top of it: the picker adds whatever
     // comes back and selects it, so the session being created is not lost.
     onCreateWorktree: (branchSeed) => createWorktreeFor(project, branchSeed),
-  });
-  if (!spec) return;
+    // Runs with the dialog open: a refusal — a model the server rejects with
+    // 400 or 503 among them — shows there, and every selection is kept.
+    onSubmit: async (spec) => {
+      try {
+        return await api.createSession(
+          spec.name, project.path, spec.agent, spec.model, spec.worktreeId, spec.sandbox,
+        );
+      } catch (error) {
+        // A 404 means the picker offered a worktree that has since gone; a
+        // refresh is what stops the next attempt offering it again.
+        if (error.status === 404) refresh();
+        throw error;
+      }
+    },
+  }, models);
+  if (!session) return;
   try {
-    const session = await api.createSession(
-      spec.name, project.path, spec.agent, spec.worktreeId, spec.sandbox,
-    );
     await refresh();
     // Creating a session makes its project the most recently active, so the
     // server moves that project to the head of the freshly rendered tree.
@@ -722,9 +747,6 @@ async function createSession(project) {
     workspace.openSession(session.id);
   } catch (error) {
     fail(error);
-    // A 404 here means the picker offered a worktree that has since gone; a
-    // refresh is what stops the next attempt offering it again.
-    if (error.status === 404) await refresh();
   }
 }
 
@@ -763,6 +785,7 @@ async function openSessionSettings(id) {
   const result = await sessionSettingsDialog(state, {
     getState: () => store.has(id) ? store.session(id) : { ...state, connected: false },
     subscribe: (paint) => store.subscribe(id, paint),
+    modelLabel: (session) => modelLabel(catalogs, session.agent, session.model),
     onError: fail,
     saveSandbox: async (value) => {
       try {

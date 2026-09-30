@@ -88,6 +88,9 @@ function blankState(id) {
     // in `workingDir`; compare that with `projectPath` to tell the two apart.
     worktreeId: null,
     agent: 'claude-code',
+    // The model chosen at creation, or null for the agent's default. Fixed for
+    // the session's lifetime.
+    model: null,
     status: 'idle',
     // When the server filed this session away, or null while it is live.
     // Server state like `status`, and arriving the same way: on connect, and
@@ -205,6 +208,7 @@ export class Store {
       projectPath: live.projectPath,
       worktreeId: live.worktreeId,
       agent: live.agent,
+      model: live.model,
       status: live.status,
       archivedAt: live.archivedAt,
       autoApproveWrite: live.autoApproveWrite,
@@ -594,7 +598,8 @@ export function toMarkdown(state, directory = null) {
     const kind = state.worktreeId
       ? ' (worktree)'
       : isFormerWorktree(state) ? ' (former worktree)' : '';
-    parts.push(`\`${state.workingDir}\`${kind} · ${state.agent}`, '');
+    const model = state.model ? ` · ${state.model}` : '';
+    parts.push(`\`${state.workingDir}\`${kind} · ${state.agent}${model}`, '');
   }
 
   for (const row of state.rows) {

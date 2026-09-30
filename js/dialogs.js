@@ -6,6 +6,7 @@
  */
 
 import { preferredAgent } from './agents.js';
+import { modelChoices, pickModel } from './models.js';
 import { copyWithFeedback, idChip } from './clipboard.js';
 import { sandboxPathEntries, isExactOverride } from './sandbox-paths.js';
 import {
@@ -42,9 +43,13 @@ const el = (tag, className, text) => {
  *
  * @param {object} spec
  * @param {string} spec.title
- * @param {(body: HTMLElement, submit: () => void) => void} spec.body fills the
- *   form; `submit` runs `collect` and closes, for controls that confirm on
- *   their own (a Delete button that shouldn't need Save pressed afterwards)
+ * @param {(body: HTMLElement, submit: () => void, gate: () => void) => void} spec.body
+ *   fills the form; `submit` runs `collect` and closes, for controls that
+ *   confirm on their own (a Delete button that shouldn't need Save pressed
+ *   afterwards); `gate` re-reads `canConfirm` after the form changes
+ * @param {() => boolean} [spec.canConfirm] false keeps the confirm button
+ *   disabled — for a form that cannot be submitted at all, as opposed to one
+ *   whose input `collect` rejects
  * @param {string} spec.confirm label for the confirming button
  * @param {boolean} [spec.danger] style the confirm button as destructive
  * @param {boolean} [spec.dismissOnly] drop the Cancel button — for a dialog
@@ -77,11 +82,13 @@ function show(spec) {
 
     let settled = null;
     let pending = false;
+    const allowed = () => !spec.canConfirm || spec.canConfirm();
+    const gate = () => { confirm.disabled = pending || !allowed(); };
 
     const attempt = async () => {
       // An async collect leaves the form live while it waits; without this,
       // Enter held down or a second click would fire the request twice.
-      if (pending) return;
+      if (pending || !allowed()) return;
       pending = true;
       confirm.disabled = true;
       try {
@@ -92,13 +99,14 @@ function show(spec) {
         error.style.display = '';
       } finally {
         pending = false;
-        confirm.disabled = false;
+        gate();
       }
     };
 
     // Filled only now that `attempt` exists, so the body can wire its own
     // self-confirming controls.
-    spec.body(body, attempt);
+    spec.body(body, attempt, gate);
+    gate();
 
     confirm.addEventListener('click', attempt);
     cancel.addEventListener('click', () => dialog.close());
@@ -973,12 +981,67 @@ export function usageDialog(load) {
 /* sessions                                                           */
 /* ------------------------------------------------------------------ */
 
+/**
+ * The model select for the new-session dialog, kept scoped to `agentSelect`.
+ * `catalogs` may still be a promise. `blocked()` is the reason Create must stay
+ * disabled, or null, and `onChange` fires whenever that may have changed.
+ */
+function modelPicker(body, agentSelect, catalogs, onChange) {
+  // Null is "loading" to modelChoices, so a caller that passed nothing gets
+  // the unavailable reason instead of a wait that never ends.
+  let known = catalogs instanceof Promise ? null : (catalogs ?? new Error('not requested'));
+  let choices = modelChoices(known, agentSelect.value);
+  const wrap = el('div', 'field');
+  wrap.appendChild(el('label', null, 'Model'));
+  const select = el('select');
+  const note = el('div', 'dlg-note');
+  wrap.append(select, note);
+  body.appendChild(wrap);
+
+  const paint = (keep) => {
+    choices = modelChoices(known, agentSelect.value);
+    const current = keep ? select.value : null;
+    select.replaceChildren();
+    for (const model of choices.models) {
+      const option = el('option', null, model.name === model.id ? model.id : `${model.name} · ${model.id}`);
+      option.value = model.id;
+      select.appendChild(option);
+    }
+    select.value = pickModel(choices, current) ?? '';
+    select.disabled = !choices.models.length;
+    // Loading is a wait, not a fault; everything else blocking is one.
+    note.className = choices.blocked && known !== null ? 'dlg-note warn' : 'dlg-note';
+    note.textContent = choices.blocked ?? '';
+    note.style.display = choices.blocked ? '' : 'none';
+    onChange();
+  };
+
+  // A new agent means a new catalog: start over from its first model.
+  agentSelect.addEventListener('change', () => paint(false));
+  paint(false);
+  if (catalogs instanceof Promise) {
+    catalogs
+      .then((value) => value, (error) => (error instanceof Error ? error : new Error(String(error))))
+      .then((value) => {
+        known = value;
+        paint(true);
+      });
+  }
+  return { select, blocked: () => choices.blocked };
+}
+
 /** The "New worktree…" entry's value. Not an id, so it can never collide. */
 const NEW_WORKTREE = '\0new';
 
 /**
- * New session in a project: `{name, agent, worktreeId}`, or null. `worktreeId`
- * is null for a session that runs in the project directory.
+ * New session in a project. Resolves whatever `handlers.onSubmit` resolved —
+ * the created session — or, without that handler, `{name, agent, model,
+ * worktreeId}`; null when dismissed. `worktreeId` is null for a session that
+ * runs in the project directory.
+ *
+ * `onSubmit` runs with the dialog still open, so a refused create — a 400 or
+ * 503 over the model, say — is shown under the fields with every selection
+ * intact, rather than as a toast over a form that has gone.
  *
  * A picker rather than the toggle-and-two-fields this used to be: worktrees are
  * their own resource now, so the choice is which of the project's existing ones
@@ -986,17 +1049,31 @@ const NEW_WORKTREE = '\0new';
  * the same decision reached from the other end.
  *
  * The agents come from the server, through `GET /agents`, rather than from a
- * list kept here — see `js/agents.js`. An empty one drops the field altogether
- * and resolves `agent: null`, which is sent as no `agent` at all.
+ * list kept here — see `js/agents.js`.
+ *
+ * Models belong to an agent, so the picker lists only the selected agent's
+ * catalog and lands on its first model, again whenever the agent changes: an id
+ * carried across would be one the server rejects. There is no "default"
+ * entry — every session is created with an explicit model — so an agent whose
+ * catalog is missing, failed or empty cannot be created at all, and the reason
+ * is shown beside the picker. The catalogs arrive while the dialog is already
+ * open; Create waits for them. With no agent list there is no catalog to pick
+ * from either, so that blocks creation too.
  *
  * @param {object} project
  * @param {object[]} worktrees from `GET /worktrees?project_path=…`
  * @param {object[]} agents from `GET /agents`, already normalized
- * @param {{onCreateWorktree?: (branchSeed: string) => Promise<object|null>}} handlers
+ * @param {{
+ *   onCreateWorktree?: (branchSeed: string) => Promise<object|null>,
+ *   onSubmit?: (spec: object) => Promise<object>,
+ * }} handlers
+ * @param {Promise<object>|object|null} catalogs from `GET /models`, already
+ *   normalized; a rejection blocks every agent
  */
-export function newSessionDialog(project, worktrees = [], agents = [], handlers = {}) {
+export function newSessionDialog(project, worktrees = [], agents = [], handlers = {}, catalogs = null) {
   let nameInput;
   let agentSelect = null;
+  let models = null;
   let sandboxToggle;
   let picked = '';
   const list = [...worktrees];
@@ -1004,15 +1081,19 @@ export function newSessionDialog(project, worktrees = [], agents = [], handlers 
   return show({
     title: `New session in ${project.name || project.path}`,
     confirm: 'Create',
-    body: (body) => {
+    canConfirm: () => !!models && !models.blocked(),
+    body: (body, submit, gate) => {
       nameInput = field(body, 'Name', suggestName(), {
         hint: 'Suggestions are not checked for uniqueness — duplicates are fine.',
       });
 
       // No list means an unreachable or too-old server, not a server with no
-      // agents: offering an empty select would only be a way to fail on create,
-      // so the field goes and the server applies its own default.
-      if (agents.length) {
+      // agents. Without an agent there is no catalog to take a model from, and
+      // leaving both to the server is exactly the fallback models rule out.
+      if (!agents.length) {
+        body.appendChild(el('div', 'dlg-note warn',
+          'Agent list unavailable: sessions cannot be created until the server lists its agents.'));
+      } else {
         const wrap = el('div', 'field');
         wrap.appendChild(el('label', null, 'Agent'));
         agentSelect = el('select');
@@ -1026,6 +1107,7 @@ export function newSessionDialog(project, worktrees = [], agents = [], handlers 
         agentSelect.value = preferredAgent(agents);
         wrap.appendChild(agentSelect);
         body.appendChild(wrap);
+        models = modelPicker(body, agentSelect, catalogs, gate);
       }
 
       const sandboxField = el('div');
@@ -1129,10 +1211,16 @@ export function newSessionDialog(project, worktrees = [], agents = [], handlers 
     collect: () => {
       const name = nameInput.value.trim();
       if (!name) throw new Error('Give the session a name');
-      return {
-        name, agent: agentSelect ? agentSelect.value : null, worktreeId: picked || null,
-        ...(supportsSandbox(agentSelect?.value) ? { sandbox: sandboxToggle.checked } : {}),
+      const blocked = models ? models.blocked() : 'Agent list unavailable';
+      if (blocked) throw new Error(blocked);
+      const spec = {
+        name,
+        agent: agentSelect.value,
+        model: models.select.value,
+        worktreeId: picked || null,
+        ...(supportsSandbox(agentSelect.value) ? { sandbox: sandboxToggle.checked } : {}),
       };
+      return handlers.onSubmit ? handlers.onSubmit(spec) : spec;
     },
   });
 }
@@ -1281,6 +1369,10 @@ export function sessionSettingsDialog(state, handlers = {}) {
       if (state.worktreeId !== null && state.worktreeId !== undefined) {
         idDetail(ids, 'Worktree ID', state.worktreeId);
       }
+      // Read-only: a session keeps the model it was created with. Sessions
+      // older than model selection have none, and show none.
+      const model = handlers.modelLabel?.(state) ?? state.model;
+      if (model) detail(ids, 'Model', model);
       body.appendChild(ids);
 
       if (supportsSandbox(state.agent)) {

@@ -11,6 +11,7 @@
  */
 
 import { normalizeAgents } from './agents.js';
+import { normalizeModels } from './models.js';
 import { asProject, asSession, asWorktree, each, wireId } from './ids.js';
 
 import { requireToken, tokenFetch, rejectToken } from './auth.js';
@@ -84,6 +85,17 @@ function detail(text, status) {
  * too-old server means for the picker.
  */
 export const listAgents = () => request('GET', '/agents').then(normalizeAgents);
+
+/**
+ * Each agent's model catalog, keyed by agent id: `{models: [{id, name}],
+ * error}` — see `js/models.js`.
+ *
+ * Discovered once when the server started and never refreshed, so a call is
+ * cheap and always gives the same answer until a restart. A harness whose
+ * discovery failed reports `error` with no models rather than failing the
+ * request; this rejecting means the server is unreachable or predates it.
+ */
+export const listModels = () => request('GET', '/models').then(normalizeModels);
 
 /* ------------------------------------------------------------------ */
 /* usage                                                              */
@@ -204,12 +216,19 @@ export const listSessions = () => request('GET', '/sessions').then(each(asSessio
  * `agent` is omitted rather than guessed when the dialog had no list to pick
  * from: the field is optional and the server's own default is a better answer
  * than a name this client made up.
+ *
+ * `model` is always sent, exactly as the agent's catalog gave it: this client
+ * never leaves the model to the harness (see `js/models.js`). The server
+ * answers 400 for an id not in the agent's catalog and 503 when that catalog
+ * failed to load. The choice is fixed for the session's lifetime: there is no
+ * `PATCH` for it.
  */
-export const createSession = (name, projectPath, agent, worktreeId = null, sandbox) =>
+export const createSession = (name, projectPath, agent, model, worktreeId = null, sandbox) =>
   request('POST', '/sessions', {
     name,
     project_path: projectPath,
     ...(agent ? { agent } : {}),
+    model,
     worktree_id: wireId(worktreeId),
     ...(typeof sandbox === 'boolean' ? { sandbox } : {}),
   }).then(asSession);

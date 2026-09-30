@@ -16,6 +16,7 @@
  */
 
 import { agentName } from './agents.js';
+import { modelLabel } from './models.js';
 import { byArchivedAt, filedAt, filedLabel, isArchived, partition } from './archive.js';
 import { isFormerWorktree } from './worktree.js';
 
@@ -69,6 +70,8 @@ export class Sidebar {
     this.worktrees = new Map();
     /** @type {object[]} agents from `GET /agents`, for the tooltip's label. */
     this.agents = [];
+    /** @type {object} catalogs from `GET /models`, for the tooltip's model name. */
+    this.catalogs = {};
     this.activeId = null;
     this.selectedIds = new Set();
     this.selectionAnchor = null;
@@ -90,11 +93,12 @@ export class Sidebar {
     this.root.addEventListener('scroll', () => this.closeMenu());
   }
 
-  setData(projects, sessions, worktrees = [], agents = []) {
+  setData(projects, sessions, worktrees = [], agents = [], catalogs = {}) {
     this.projects = projects;
     this.sessions = sessions;
     this.worktrees = new Map(worktrees.map((w) => [String(w.id), w]));
     this.agents = agents;
+    this.catalogs = catalogs;
     this.render();
   }
 
@@ -312,7 +316,10 @@ export class Sidebar {
     // which is what a session started under an agent this server no longer
     // registers shows, rather than nothing.
     const agent = agentName(this.agents, session.agent);
-    item.title = `${session.name}\n#${id}\n${agent}` + (where ? `\n${where}` : '')
+    // A legacy session has no model and shows none.
+    const model = modelLabel(this.catalogs, session.agent, session.model);
+    item.title = `${session.name}\n#${id}\n${agent}${model ? ` · ${model}` : ''}`
+      + (where ? `\n${where}` : '')
       + (inArchive ? `\nArchived ${filedLabel(session.archived_at)}` : '');
     item.addEventListener('click', (event) => {
       this.selectSession(session, scope, event.shiftKey);

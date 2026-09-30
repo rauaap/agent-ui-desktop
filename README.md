@@ -74,6 +74,11 @@ CSP intentionally allows only same-origin connections; the supported path is
   says this server can run. Settings lets this browser remember which one to
   preselect; without that preference, the server’s default is used. Nothing is
   listed here, so an agent added on the server shows up on the next refresh.
+- **Model picker** — beside the agent, the new-session dialog offers that
+  agent's models from `GET /models`, preselecting the first; switching agent
+  preselects the new agent's first. An agent without a usable catalog cannot be
+  created, and the dialog says why. A session keeps its model for life; its
+  catalog name is shown read-only in session settings and the tree tooltip.
 - **Worktrees** — a worktree is its own thing, not something a session owns: it
   is created on its own, several sessions can share one, and it outlives the
   sessions that used it. The new-session dialog picks one — "project directory"
@@ -134,6 +139,7 @@ js/
   api.js              REST over fetch(), same-origin
   ids.js              ids: numbers on the wire, strings everywhere above api.js
   agents.js           the server's agent list, normalized — nothing hardcoded
+  models.js           per-agent model catalogs and picker choices — no DOM
   socket.js           selected-session WebSocket: backoff + buffered replay
   file-tree.js        lazy file-tree WebSocket and reconnect lifecycle
   file-tree-cache.js  validated snapshot/patch cache — no DOM
@@ -374,6 +380,37 @@ the field disappears and the create request omits `agent`, which leaves the
 choice exactly where it was: with the server's default. That is deliberately not
 a hardcoded fallback list, because a hardcoded list is the thing this replaced.
 
+### A model belongs to an agent, and to a session for life
+
+`GET /models` maps each agent id to `{models: [{id, name}], error}`. The server
+discovers every catalog once at startup and never refreshes. The dialog asks
+afresh each time it opens, and opens at once: the model field reads "Loading
+models…" and Create waits until the answer lands. A model id is opaque —
+`claude-opus-5-5`, `openai-codex/gpt-5.5` — and only means something alongside
+the agent it came from, so the picker lists the selected agent's catalog alone
+and lands on its first model, again whenever the agent changes. There is no
+ranking: the server's order is the order.
+
+Every session is created with an explicit `model`. There is no "default" entry
+and no fallback to letting the harness choose: broken discovery is the server's
+to fix, and a client that worked around it would hide the breakage. So Create is
+disabled for an agent, with the reason beside the picker, when the `/models`
+request failed (an older server's 404 included), when the catalog has no entry
+for the agent, when its entry carries an `error`, or when its `models` list is
+empty. Other agents stay usable. With no agent list at all there is no catalog
+to take a model from, so creation is blocked then too.
+
+The create request runs with the dialog still open. A 400 (a model outside the
+agent's catalog) or 503 (that catalog unavailable) is shown under the fields
+with every selection intact; no other model is substituted.
+
+Every session row carries `model`: the id it was created with, or null for a
+session older than the field, which shows no model at all. Labels use the
+catalog name while the agent still lists the id, and the id itself otherwise;
+the catalogs for that ride along with the ordinary refresh and keep their last
+answer when a read fails. There is no switching mid-session — `PATCH` rejects
+`model` and turns take none — so it is displayed read-only and never sent again.
+
 ### A subscription is not an agent
 
 `GET /usage` reports `claude_code` and `codex`. Those look like agent ids and
@@ -498,7 +535,8 @@ settings.
 
 The pure modules — the diff, the markdown parser, the reducer, file-tree protocol
 state, Bash completion and escaping, the worktree path template, session
-location and detachment, the id coercion, the agent list, and the archive's
+location and detachment, the id coercion, the agent list, model catalogs and
+the archive's
 split and ordering — have unit tests. Sandbox tests also cover settings races,
 reconnects, pending-save guards, and mocked REST contracts. Most of the original
 tests were ported from the Android
@@ -506,6 +544,8 @@ client's `LineDiffTest`, `MarkdownTest` and `WorktreeTest`:
 
 ```sh
 node test/run.js          # any JS runtime
+node test/auth-tests.js   # token transport, mocked fetch/WebSocket
+node test/model-api-tests.js  # /models, POST /sessions model, the picker
 ```
 
 or open `test/index.html` in a browser, which needs nothing installed at all.
