@@ -17,6 +17,7 @@ import { FileTreeSocket } from './file-tree.js';
 import { composerEntries, composerEntry, MessageHistory } from './message-history.js';
 import { isBusy, parseComposerInput, toMarkdown } from './store.js';
 import { SessionSocket } from './socket.js';
+import { SessionDraft } from './session-draft.js';
 import { TranscriptView } from './render/transcript.js';
 import { isFormerWorktree } from './worktree.js';
 
@@ -46,6 +47,7 @@ export class SessionPane {
     this.store = store;
     this.handlers = handlers;
     this.directory = directory;
+    this.draft = new SessionDraft(sessionId);
 
     this.socket = new SessionSocket(sessionId, store, (event) => {
       handlers.onLiveEvent?.(sessionId, event);
@@ -81,6 +83,10 @@ export class SessionPane {
     this.archiveNotice = this.buildArchiveNotice();
     this.root.appendChild(this.archiveNotice);
     this.root.appendChild(this.buildComposer());
+    this.setComposerValue(this.draft.saved);
+    // localStorage writes are synchronous, so normal page exits can save here.
+    this.onBeforeUnload = () => { this.draft.save(this.input.value); };
+    window.addEventListener('beforeunload', this.onBeforeUnload);
 
     // Zoom and window resizes change the composer's viewport-relative growth
     // cap, so a box sitting at the old limit has to be re-measured. Only the
@@ -441,6 +447,9 @@ export class SessionPane {
     this.messageHistory.add(historyEntry);
     this.pendingHistoryEchoes.push(historyEntry);
     this.input.value = '';
+    if (!this.draft.save('')) {
+      this.handlers.onError('Sent, but the saved draft could not be cleared in this browser');
+    }
     this.hideCompletions();
     this.autoGrow();
     this.paintMode();
@@ -514,6 +523,10 @@ export class SessionPane {
   }
 
   destroy() {
+    if (!this.draft.save(this.input.value)) {
+      this.handlers.onError('The draft could not be saved in this browser');
+    }
+    window.removeEventListener('beforeunload', this.onBeforeUnload);
     window.removeEventListener('resize', this.onViewportChange);
     this.unsubscribe();
     this.fileTree.close();

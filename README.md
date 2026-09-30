@@ -262,6 +262,12 @@ prompt and command history. History is recovered from replayed transcript rows,
 and moving down past the newest entry restores the unsent draft that was in the
 composer before navigation began. Typing after recall starts a new traversal.
 
+Switching away from a session saves its composer text in browser localStorage;
+returning restores it. Empty drafts and successfully sent drafts remove the saved
+key. Typing does not write to storage. Normal page reloads and closes also save
+synchronously via `beforeunload`, without a warning dialog. Browsers do not
+guarantee this event on every exit (for example, a force-close).
+
 ### Project settings report; they do not edit
 
 The session gear saves — rename and the two auto-approve toggles are a `PATCH

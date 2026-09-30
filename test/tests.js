@@ -25,6 +25,7 @@ import { ADD, DELETE, MAX_DIFF_LINES, diff } from '../js/render/diff.js';
 import { asProject, asSession, asWorktree, wireId } from '../js/ids.js';
 import { toHtml } from '../js/render/markdown.js';
 import { composerEntries, MessageHistory } from '../js/message-history.js';
+import { SessionDraft } from '../js/session-draft.js';
 import { Store, parseComposerInput, reduce, rowText } from '../js/store.js';
 import {
   actionSummary,
@@ -57,6 +58,45 @@ function test(name, fn) {
     results.push({ name, ok: false, message: error.message });
   }
 }
+
+function draftStorage() {
+  const entries = new Map();
+  return {
+    getItem: (key) => entries.get(key) ?? null,
+    setItem: (key, value) => entries.set(key, value),
+    removeItem: (key) => entries.delete(key),
+    entries,
+  };
+}
+
+test('drafts: session exit saves exact text, restores it, and isolates sessions', () => {
+  const storage = draftStorage();
+  const draft = new SessionDraft('1', () => storage);
+  assertEqual(draft.saved, '');
+  assertEqual(storage.entries.size, 0); // Loading never writes.
+  assertEqual(draft.save(' !command\n  '), true);
+  assertEqual(new SessionDraft('1', () => storage).saved, ' !command\n  ');
+  assertEqual(new SessionDraft('2', () => storage).saved, '');
+  assertEqual(draft.save('edited'), true);
+  assertEqual(new SessionDraft('1', () => storage).saved, 'edited');
+  assertEqual(draft.save(''), true);
+  assertEqual(storage.entries.size, 0);
+  assertEqual(new SessionDraft('1', () => storage).saved, '');
+});
+
+test('drafts: storage failures do not throw or mark unsaved text as saved', () => {
+  const storage = draftStorage();
+  const draft = new SessionDraft('1', () => storage);
+  draft.save('original');
+  storage.setItem = () => { throw new Error('Full'); };
+  assertEqual(draft.save('edited'), false);
+  assertEqual(draft.saved, 'original');
+  storage.removeItem = () => { throw new Error('Blocked'); };
+  assertEqual(draft.save(''), false);
+  const unavailable = new SessionDraft('2', () => { throw new Error('Blocked'); });
+  assertEqual(unavailable.saved, '');
+  assertEqual(unavailable.save('text'), false);
+});
 
 test('sandbox paths preserve server expressions, spaces and permissions', () => {
   const paths = ['~user/config', '$HOME/tool data', '${HOME}/config', '/path with spaces', '/trailing '];
