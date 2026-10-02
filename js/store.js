@@ -11,7 +11,9 @@
  *     call ID
  *   - approvals and questions resolve in place when their response arrives
  *   - a `bash_output` fills in the card its `bash_input` opened
- *   - anything that isn't `output` closes the open agent message
+ *   - an accepted `input` waits in a pending queue, outside the transcript,
+ *     until `inputs_shipped` moves it in at the turn boundary
+ *   - anything else that isn't `output` closes the open agent message
  *
  * Keeping it DOM-free means it can be exercised headlessly (see test/), and it
  * gives the renderer a single job: mirror rows into elements.
@@ -51,6 +53,25 @@ export function parseComposerInput(raw) {
   if (text.startsWith('!')) return { kind: 'bash', command: text.slice(1).trim() };
   if (text.startsWith('\\!')) return { kind: 'input', text: text.slice(1) };
   return { kind: 'input', text };
+}
+
+/**
+ * Why composer input cannot be sent right now, or null when it can. Being busy
+ * is never a reason: the server queues a prompt for the next turn, and Bash
+ * does not take the turn at all. Connectivity is the socket's to report.
+ *
+ * @param {{kind: 'bash' | 'input'}} parsed from parseComposerInput
+ */
+export function sendRefusal(state, parsed) {
+  // The box is disabled while archived, so this is for the race: the event
+  // that archived the session — from another device, or from a project
+  // archive — can land between the keystroke and the send. Prompts *and*
+  // commands are refused; bash is outside the turn, not outside this.
+  if (state.archivedAt) return 'This session is archived — unarchive it to send anything';
+  if (parsed.kind !== 'bash' && state.sandboxSaving) {
+    return 'Wait for the sandbox setting to finish saving before starting a turn';
+  }
+  return null;
 }
 
 /** One-line summary of a finished command: how it ended, how long it took. */
@@ -114,6 +135,14 @@ function blankState(id) {
     openBubble: null,
     pendingApprovalId: null,
     pendingQuestionId: null,
+    // Inputs the server accepted but has not shipped to a turn yet, in
+    // acceptance order. Rows shaped like a user transcript row plus
+    // `messageId`, but never in `rows` and never keyed for the transcript.
+    queue: [],
+    // Message IDs seen accepted or shipped in this state. Shipping must not
+    // re-record history for an acceptance already seen, nor append twice.
+    acceptedIds: new Set(),
+    shippedIds: new Set(),
   };
 }
 
@@ -280,10 +309,11 @@ function newRow(state, row) {
   return row;
 }
 
-function append(state, row, changes) {
+/** `extra` annotates the change itself, e.g. `history: false` for the pane. */
+function append(state, row, changes, extra = null) {
   newRow(state, row);
   state.rows.push(row);
-  changes.push({ op: 'append', row });
+  changes.push({ op: 'append', row, ...extra });
   // Trim from the front once past the cap, so a very long session cannot grow
   // the transcript without bound.
   while (state.rows.length > MAX_ROWS) {
@@ -292,6 +322,10 @@ function append(state, row, changes) {
     changes.push({ op: 'remove', row: dropped });
   }
   return row;
+}
+
+function queuedItem(messageId, message) {
+  return { kind: 'user', messageId, text: message.text ?? '', from: inputSource(message) };
 }
 
 function findRow(state, predicate) {
@@ -391,12 +425,69 @@ export function reduce(state, event) {
       changes.push({ op: 'meta' });
       break;
 
-    case 'input':
-      state.openBubble = null;
-      // `from` is null for the user's own words, including older records that
-      // predate provenance; see docs/inter-agent-ui.md.
-      append(state, { kind: 'user', text: event.text ?? '', from: inputSource(event) }, changes);
+    case 'input': {
+      if (event.delivery !== 'queued') {
+        // A historical record from before the queue: it was delivered when it
+        // was sent, so it is a transcript row where it stands. Replays give
+        // these a `message_id` too, which is why `delivery` decides.
+        state.openBubble = null;
+        // `from` is null for the user's own words, including older records that
+        // predate provenance; see docs/inter-agent-ui.md.
+        append(state, { kind: 'user', text: event.text ?? '', from: inputSource(event) }, changes);
+        break;
+      }
+      // Accepted, not delivered: it waits outside the transcript, and must not
+      // close the agent message that may be streaming right now.
+      const messageId = event.message_id;
+      if (state.acceptedIds.has(messageId) || state.shippedIds.has(messageId)) break;
+      const item = queuedItem(messageId, event);
+      state.acceptedIds.add(messageId);
+      state.queue.push(item);
+      changes.push({ op: 'accepted', item }, { op: 'queue' });
       break;
+    }
+
+    // The authoritative pending list, sent on every connection after the
+    // replay. It replaces rather than merges: entries that shipped or vanished
+    // while we were away must go, and acceptances older than the replay window
+    // appear here only.
+    case 'input_queue': {
+      const items = (Array.isArray(event.messages) ? event.messages : [])
+        .filter((m) => m && Number.isInteger(m.message_id) && !state.shippedIds.has(m.message_id))
+        .map((m) => queuedItem(m.message_id, m));
+      for (const item of items) {
+        if (state.acceptedIds.has(item.messageId)) continue;
+        state.acceptedIds.add(item.messageId);
+        changes.push({ op: 'accepted', item });
+      }
+      state.queue = items;
+      changes.push({ op: 'queue' });
+      break;
+    }
+
+    // The turn boundary: these messages are what the next turn was handed, so
+    // this, not their acceptance, is where they enter the conversation.
+    case 'inputs_shipped': {
+      const messages = Array.isArray(event.messages) ? event.messages : [];
+      const shipped = new Set();
+      for (const message of messages) {
+        const messageId = message?.message_id;
+        if (!Number.isInteger(messageId) || state.shippedIds.has(messageId)) continue;
+        state.openBubble = null;
+        state.shippedIds.add(messageId);
+        shipped.add(messageId);
+        // History was recorded at acceptance; record it here only when that
+        // acceptance was never seen (it fell outside the replay window).
+        const history = !state.acceptedIds.has(messageId);
+        state.acceptedIds.add(messageId);
+        append(state, queuedItem(messageId, message), changes, { history });
+      }
+      if (shipped.size) {
+        state.queue = state.queue.filter((item) => !shipped.has(item.messageId));
+        changes.push({ op: 'queue' });
+      }
+      break;
+    }
 
     case 'output': {
       const text = event.text ?? '';

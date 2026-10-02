@@ -286,10 +286,12 @@ export const deleteSession = (id) => request('DELETE', `/sessions/${id}`);
 export const stopSession = (id) => request('POST', `/sessions/${id}/stop`);
 
 /**
- * Starts a turn over REST. The composer normally sends over the WebSocket
+ * Queues a prompt over REST, resolving `{status: "accepted", message_id}` —
+ * accepted, not delivered: it ships with the next turn, which starts now only
+ * if the session is idle. The composer normally sends over the WebSocket
  * instead — same effect, and it keeps prompt and transcript on one channel —
- * but this exists because the server offers it and it is the only way to start
- * a turn without an open socket.
+ * but this exists because the server offers it and it is the only way to send
+ * without an open socket.
  */
 export const startTurn = (id, prompt) =>
   request('POST', `/sessions/${id}/turn`, { prompt });

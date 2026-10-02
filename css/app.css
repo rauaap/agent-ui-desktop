@@ -1179,6 +1179,50 @@ body.sidebar-resizing * { cursor: col-resize !important; user-select: none !impo
  * and the composer, and is `flex: none` for the same reason the composer is:
  * the transcript gives up the space, since the notice is the only thing that
  * explains the box under it. */
+/* Accepted inputs waiting for the next turn: between the transcript and the
+ * composer, since they are no longer drafts but not yet conversation. Dashed,
+ * in the same orange-for-you, blue-for-another-agent as the transcript rows. */
+.queue {
+  flex: none;
+  max-height: min(180px, 28vh);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 20px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.queue-head {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--faint);
+}
+
+.queued {
+  align-self: flex-end;
+  max-width: 640px;
+  padding: 6px 12px;
+  border: 1px dashed var(--accent-line);
+  border-radius: var(--radius-lg);
+  color: var(--muted);
+}
+
+.queued-peer {
+  align-self: stretch;
+  max-width: none;
+  border-color: var(--info-line);
+  border-left: 3px solid var(--info);
+}
+
+.queued-peer .peer-head { padding-right: 0; }
+
+.queued-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .archive-notice {
   display: flex;
   align-items: center;

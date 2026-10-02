@@ -45,6 +45,11 @@ export class TranscriptView {
     this.list = el('div', 'transcript');
     this.wrap.appendChild(this.list);
 
+    // Accepted inputs waiting for a turn. Outside the scrolling list, since they
+    // are not part of the conversation yet; the pane places it by the composer.
+    this.queueView = el('div', 'queue');
+    this.queueView.setAttribute('aria-label', 'Queued messages');
+
     this.scrollButton = el('button', 'scroll-down', '↓');
     this.scrollButton.title = 'Jump to the latest';
     this.scrollButton.addEventListener('click', () => this.scrollToBottom());
@@ -101,6 +106,9 @@ export class TranscriptView {
         case 'reset':
           this.rebuild({ wasAtBottom, scrollTop: previousScrollTop });
           return;
+        case 'queue':
+          this.renderQueue();
+          break;
         case 'append': {
           const node = this.build(change.row);
           this.nodes.set(change.row.key, node);
@@ -159,6 +167,7 @@ export class TranscriptView {
       fragment.appendChild(node);
     }
     this.list.appendChild(fragment);
+    this.renderQueue();
     if (position) this.restoreScroll(position.wasAtBottom, position.scrollTop);
     else this.scrollToBottom();
   }
@@ -279,6 +288,9 @@ export class TranscriptView {
   }
 
   repaintSessionRefs() {
+    for (const node of this.queueView.querySelectorAll('[data-session-ref]')) {
+      this.paintSessionRef(node);
+    }
     const refs = this.list.querySelectorAll('[data-session-ref]');
     if (!refs.length) return;
     const touched = new Set();
@@ -307,6 +319,39 @@ export class TranscriptView {
       node.append(typeof part === 'string' ? part : this.sessionRef(part.sessionId, 'target'));
     }
     return node;
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* pending queue                                                    */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * Redraw the queued inputs. The list is short and changes only on
+   * acceptance and shipment, so a full redraw is cheap; it sits outside the
+   * transcript, so the streaming message above is never touched.
+   */
+  renderQueue() {
+    const { queue } = this.store.session(this.sessionId);
+    this.queueView.replaceChildren();
+    this.queueView.style.display = queue.length ? '' : 'none';
+    if (!queue.length) return;
+    this.queueView.appendChild(el('div', 'queue-head', queue.length === 1
+      ? 'QUEUED · sent with the next turn'
+      : `${queue.length} QUEUED · sent together with the next turn`));
+    for (const item of queue) {
+      const node = el('div', item.from ? 'queued queued-peer' : 'queued');
+      node.dataset.messageId = String(item.messageId);
+      if (item.from) {
+        const head = el('div', 'peer-head');
+        head.appendChild(el('span', 'peer-from', 'FROM'));
+        head.appendChild(item.from.type === 'agent'
+          ? this.sessionRef(item.from.sessionId, 'sender')
+          : el('span', 'ref-missing', 'unknown source'));
+        node.appendChild(head);
+      }
+      node.appendChild(el('div', 'queued-text', item.text));
+      this.queueView.appendChild(node);
+    }
   }
 
   /* ---------------------------------------------------------------- */

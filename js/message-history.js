@@ -22,6 +22,20 @@ export function composerEntries(rows) {
 }
 
 /**
+ * The rows a batch of store changes adds to composer history. A queued input
+ * counts when it is accepted; its later shipment into the transcript is the
+ * same message, so that append is flagged `history: false` and skipped.
+ */
+export function historyRows(changes) {
+  const rows = [];
+  for (const change of changes ?? []) {
+    if (change.op === 'accepted') rows.push(change.item);
+    else if (change.op === 'append' && change.history !== false) rows.push(change.row);
+  }
+  return rows;
+}
+
+/**
  * Shell-style history cursor. The text present when navigation starts is kept
  * as a draft and restored after moving down past the newest entry.
  */

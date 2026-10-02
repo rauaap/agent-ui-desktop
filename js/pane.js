@@ -14,8 +14,12 @@ import {
   matchPaths,
 } from './completion.js';
 import { FileTreeSocket } from './file-tree.js';
-import { composerEntries, composerEntry, MessageHistory } from './message-history.js';
-import { isBusy, parseComposerInput, toMarkdown } from './store.js';
+import {
+  composerEntries, composerEntry, historyRows, MessageHistory,
+} from './message-history.js';
+import {
+  isBusy, parseComposerInput, sendRefusal, toMarkdown,
+} from './store.js';
 import { SessionSocket } from './socket.js';
 import { SessionDraft } from './session-draft.js';
 import { TranscriptView } from './render/transcript.js';
@@ -55,7 +59,8 @@ export class SessionPane {
     this.completionOpen = false;
     this.completionResults = [];
     this.completionIndex = 0;
-    this.messageHistory = new MessageHistory(composerEntries(store.session(sessionId).rows));
+    const initial = store.session(sessionId);
+    this.messageHistory = new MessageHistory(composerEntries([...initial.rows, ...initial.queue]));
     // Successful sends are added immediately, before their server echo arrives.
     // This queue prevents those echoes from adding the same entry a second time.
     this.pendingHistoryEchoes = [];
@@ -80,6 +85,7 @@ export class SessionPane {
       onOpenSession: (id) => handlers.onOpenSession?.(id),
     }, directory);
     this.root.appendChild(this.transcript.wrap);
+    this.root.appendChild(this.transcript.queueView);
     this.archiveNotice = this.buildArchiveNotice();
     this.root.appendChild(this.archiveNotice);
     this.root.appendChild(this.buildComposer());
@@ -100,12 +106,12 @@ export class SessionPane {
     this.unsubscribe = store.subscribe(sessionId, (changes) => {
       if (changes.some((c) => c.op === 'meta' || c.op === 'reset')) this.refresh();
       if (changes.some((c) => c.op === 'reset')) {
-        this.messageHistory.replace(composerEntries(store.session(sessionId).rows));
+        const state = store.session(sessionId);
+        this.messageHistory.replace(composerEntries([...state.rows, ...state.queue]));
         this.pendingHistoryEchoes = [];
       } else {
-        for (const change of changes) {
-          if (change.op !== 'append') continue;
-          const entry = composerEntry(change.row);
+        for (const row of historyRows(changes)) {
+          const entry = composerEntry(row);
           if (entry === null) continue;
           if (this.pendingHistoryEchoes[0] === entry) this.pendingHistoryEchoes.shift();
           else this.messageHistory.add(entry);
@@ -403,42 +409,22 @@ export class SessionPane {
     const parsed = parseComposerInput(this.input.value);
     if (!parsed) return;
 
-    // The box is disabled while archived, so this is for the race: the event
-    // that archived the session — from another device, or from a project
-    // archive — can land between the keystroke and the send. Prompts *and*
-    // commands are refused; bash is outside the turn lock, not outside this.
-    if (this.store.session(this.id).archivedAt) {
-      this.handlers.onError('This session is archived — unarchive it to send anything');
+    // Nothing typed after the `!` yet.
+    if (parsed.kind === 'bash' && !parsed.command) return;
+    const refusal = sendRefusal(this.store.session(this.id), parsed);
+    if (refusal) {
+      this.handlers.onError(refusal);
       return;
     }
 
     if (parsed.kind === 'bash') {
-      // Nothing typed after the `!` yet.
-      if (!parsed.command) return;
-      // Bash never takes the turn lock, so this path ignores session status
-      // entirely: a command runs while the agent works, and neither notices.
       if (!this.socket.sendBash(parsed.command)) {
         this.handlers.onError('Not connected — the command was not sent');
         return;
       }
-    } else {
-      const state = this.store.session(this.id);
-      if (state.sandboxSaving) {
-        this.handlers.onError('Wait for the sandbox setting to finish saving before starting a turn');
-        return;
-      }
-      if (isBusy(state.status)) {
-        // Rejected, but the text stays put: it is still worth sending once the
-        // turn ends, and it may be what you want to run as a command instead.
-        this.handlers.onError(
-          'The agent is busy — wait for the turn to finish, or prefix with ! to run a shell command',
-        );
-        return;
-      }
-      if (!this.socket.sendInput(parsed.text)) {
-        this.handlers.onError('Not connected — the prompt was not sent');
-        return;
-      }
+    } else if (!this.socket.sendInput(parsed.text)) {
+      this.handlers.onError('Not connected — the prompt was not sent');
+      return;
     }
 
     const historyEntry = parsed.kind === 'bash'
@@ -490,8 +476,8 @@ export class SessionPane {
     // Connectivity closes the composer, and so does the archive — the server
     // refuses both a prompt and a command in an archived session, and a dead
     // box with a notice above it says that better than a rejected send. A busy
-    // agent still does not: `!` commands bypass the turn entirely, and a prompt
-    // sent mid-turn is turned away in send() with a toast.
+    // agent does not: `!` commands bypass the turn entirely, and a prompt sent
+    // mid-turn is queued for the next one.
     this.input.disabled = offline || archived;
     this.sendButton.disabled = offline || archived;
     this.input.placeholder = archived
@@ -499,9 +485,9 @@ export class SessionPane {
       : offline
         ? 'Reconnecting…'
         : state.status === 'awaiting_approval'
-          ? 'Answer above, or ! to run a command…'
+          ? 'Answer above — a prompt sent now waits for the next turn…'
           : busy
-            ? 'The agent is working — ! runs a command…'
+            ? 'The agent is working — a prompt sent now is queued…'
             : 'Send a prompt, or ! to run a command…';
     this.stopButton.style.display = busy ? '' : 'none';
   }

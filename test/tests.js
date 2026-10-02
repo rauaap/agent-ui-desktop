@@ -477,6 +477,9 @@ const freshState = () => ({
   openBubble: null,
   pendingApprovalId: null,
   pendingQuestionId: null,
+  queue: [],
+  acceptedIds: new Set(),
+  shippedIds: new Set(),
 });
 
 const feed = (state, ...events) => {
@@ -1396,5 +1399,6 @@ results.push(...(await import('./session-settings-tests.js')).results);
 results.push(...(await import('./usage-tests.js')).results);
 results.push(...(await import('./inter-agent-tests.js')).results);
 results.push(...(await import('./model-tests.js')).results);
+results.push(...(await import('./queue-tests.js')).results);
 
 export { results };

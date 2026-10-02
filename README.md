@@ -114,6 +114,12 @@ CSP intentionally allows only same-origin connections; the supported path is
 - **Desktop notifications** — one switch in the sidebar watches the selected
   session while the app is in the background. It fires when a turn completes
   or an approval blocks, and stays quiet while that session is on screen.
+- **Message queue** — a prompt sent while the agent works is accepted, not
+  refused. It waits in a **Queued** list above the composer, with messages from
+  other agents, until the server ships everything pending to the next turn in
+  one batch; only then does each message join the transcript, in order. Stop,
+  errors and restarts keep the queue; the next prompt sent to the idle session
+  ships it. Queued messages cannot be edited or cancelled from the client.
 - **Bash mode** — a message starting with `!` runs as a shell command in the
   session's working directory instead of going to the agent. `\!` sends a prompt
   that really does start with an exclamation mark.
@@ -207,6 +213,22 @@ that changes when the sidebar is collapsed without the window moving at all.
 Nothing rescales type: zoom is the user asking for bigger text, and undoing it
 would be rude.
 
+### Queued messages enter the transcript when they ship
+
+An `input` event with `delivery: "queued"` is an acceptance, not a delivery: it
+goes into the session's pending queue, never the transcript, so a message that
+arrives mid-answer cannot split the agent message streaming above it. An
+`inputs_shipped` event is the turn boundary — it removes its IDs from the queue
+and appends one row per message, in its order, closing the open agent message.
+It carries the full text, so replay renders correctly even after the original
+acceptance has aged out of the replay window. Composer history records your own
+prompts at acceptance and never again at shipment.
+
+On every connection the server follows the replay with an `input_queue`
+snapshot, before `status`; it replaces the pending list outright. A replayed
+`input` without `delivery: "queued"` is a historical record from before the
+queue, and stays a transcript row where it stands, `message_id` or not.
+
 ### Reconnects never blank the transcript
 
 The server replays the last 200 scrollback rows on connect, then sends the
@@ -244,10 +266,8 @@ happens.
 
 Server-side a command **never takes the turn lock** — it runs while the agent is
 working and neither side notices — so the composer is deliberately not gated on
-session status. The consequence is that a normal prompt sent mid-turn has to be
-turned away by the client instead: it raises a toast and keeps your text, rather
-than disabling the box. (Queuing it is the eventual answer; rejecting it is the
-current one.)
+session status. A normal prompt sent mid-turn is not gated either: the server
+queues it for the next turn, while a command never enters that queue.
 
 The command's echo and its output are one card, filled in when the result
 arrives rather than appended, so a command that finishes mid-stream does not
