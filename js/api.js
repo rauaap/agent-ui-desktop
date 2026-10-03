@@ -106,6 +106,12 @@ export const getUsage = () => request('GET', '/usage');
 /* projects                                                           */
 /* ------------------------------------------------------------------ */
 
+/** Server-wide exact IPv4 + TCP port exceptions; PATCH replaces the whole list. */
+export const getSandboxNetwork = () => request('GET', '/sandbox-network');
+
+export const setSandboxNetwork = (sandbox_network_allowlist) =>
+  request('PATCH', '/sandbox-network', { sandbox_network_allowlist });
+
 export const getSandboxPaths = () => request('GET', '/sandbox-paths');
 
 export const setSandboxPaths = (sandbox_paths) =>

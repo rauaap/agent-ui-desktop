@@ -1,5 +1,6 @@
 import { SettingsSync, canChangeSandbox, settingsMeta, supportsSandbox } from '../js/session-settings.js';
 import { Store } from '../js/store.js';
+import { sandboxNetworkEntries } from '../js/sandbox-network.js';
 
 export const results = [];
 async function test(name, fn) {
@@ -237,6 +238,52 @@ await test('sandbox API: creation preserves false and numeric worktree ids; PATC
       reasoning_level: 'high', worktree_id: 3, sandbox: false,
     });
     equal(calls[8].body, { auto_approve_inter_agent_communication: true });
+  } finally { globalThis.fetch = original; }
+});
+
+await test('sandbox network drafts: integer ports, empty lists, and exact IP text', () => {
+  equal(sandboxNetworkEntries([]), []);
+  equal(sandboxNetworkEntries([{ ip: ' 100.64.0.10 ', port: '443' }]), [{ ip: '100.64.0.10', port: 443 }]);
+  equal(sandboxNetworkEntries([{ ip: '10.0.0.1', port: '1' }, { ip: '10.0.0.1', port: '65535' }]),
+    [{ ip: '10.0.0.1', port: 1 }, { ip: '10.0.0.1', port: 65535 }]);
+  for (const port of ['', '0', '65536', '-1', '443.5', '1e3', '0x50', 'abc']) {
+    let rejected = false;
+    try { sandboxNetworkEntries([{ ip: '10.0.0.1', port }]); } catch { rejected = true; }
+    equal(rejected, true);
+  }
+  let rejected = false;
+  try { sandboxNetworkEntries([{ ip: ' ', port: '443' }]); } catch { rejected = true; }
+  equal(rejected, true);
+});
+
+await test('sandbox network API: full replacements, normalized response, and readable errors', async () => {
+  const original = globalThis.fetch;
+  const calls = [];
+  const entries = [{ ip: '100.64.0.10', port: 443 }];
+  globalThis.fetch = async (url, options) => {
+    calls.push({ path: new URL(url).pathname, method: options.method,
+      body: options.body === undefined ? undefined : JSON.parse(options.body) });
+    return { ok: true, text: async () => JSON.stringify({ sandbox_network_allowlist: entries }) };
+  };
+  try {
+    equal((await api.getSandboxNetwork()).sandbox_network_allowlist, entries);
+    equal((await api.setSandboxNetwork([...entries, ...entries])).sandbox_network_allowlist, entries);
+    await api.setSandboxNetwork([]);
+    equal(calls, [
+      { path: '/sandbox-network', method: 'GET', body: undefined },
+      { path: '/sandbox-network', method: 'PATCH', body: { sandbox_network_allowlist: [...entries, ...entries] } },
+      { path: '/sandbox-network', method: 'PATCH', body: { sandbox_network_allowlist: [] } },
+    ]);
+    for (const [status, detail, message] of [
+      [400, 'Invalid sandbox destination', 'Invalid sandbox destination'],
+      [422, [{ loc: ['body', 'sandbox_network_allowlist', 0, 'port'], msg: 'Input should be a valid integer' }], 'Input should be a valid integer'],
+    ]) {
+      globalThis.fetch = async () => ({ ok: false, status, text: async () => JSON.stringify({ detail }) });
+      let caught;
+      try { await api.setSandboxNetwork(entries); } catch (error) { caught = error; }
+      equal(caught?.status, status);
+      equal(caught?.message, message);
+    }
   } finally { globalThis.fetch = original; }
 });
 

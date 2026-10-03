@@ -22,6 +22,7 @@ import { Notifier } from './notify.js';
 import {
   appSettingsDialog,
   sandboxPathsDialog,
+  sandboxNetworkDialog,
   confirmDialog,
   createWorktreeDialog,
   forgetProjectDialog,
@@ -948,7 +949,19 @@ async function openAppSettings() {
   setWorktreeTemplate(result.template);
   if (result.agent !== undefined) setAgentPreference(result.agent);
   if (result.action === 'sandbox-paths') await openSandboxPaths();
+  if (result.action === 'sandbox-network') await openSandboxNetwork();
   if (result.action === 'server-token') showTokenPrompt(false, true);
+}
+
+async function openSandboxNetwork() {
+  try {
+    // Always load afresh: no WebSocket event or cached empty fallback.
+    const settings = await api.getSandboxNetwork();
+    const saved = await sandboxNetworkDialog(settings.sandbox_network_allowlist, api.setSandboxNetwork);
+    if (saved !== null) toast(`${saved.length} sandbox network exceptions saved for future turns`);
+  } catch (error) {
+    fail(error);
+  }
 }
 
 async function openSandboxPaths(project = null) {

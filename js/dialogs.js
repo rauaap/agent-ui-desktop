@@ -9,6 +9,7 @@ import { preferredAgent } from './agents.js';
 import { modelChoices, pickModel, reasoningLabel } from './models.js';
 import { copyWithFeedback, idChip } from './clipboard.js';
 import { sandboxPathEntries, isExactOverride } from './sandbox-paths.js';
+import { sandboxNetworkEntries } from './sandbox-network.js';
 import {
   formatPercent,
   hasReading,
@@ -301,6 +302,9 @@ export function appSettingsDialog(template, sampleProject, agents = [], agent = 
       const paths = el('button', 'btn', 'Server sandbox paths…');
       paths.addEventListener('click', () => { action = 'sandbox-paths'; submit(); });
       body.appendChild(paths);
+      const network = el('button', 'btn', 'Server sandbox network…');
+      network.addEventListener('click', () => { action = 'sandbox-network'; submit(); });
+      body.appendChild(network);
       body.appendChild(el('div', 'dlg-label', 'Browser preferences'));
       if (agents.length) {
         const wrap = el('div', 'field');
@@ -445,6 +449,65 @@ export function sandboxPathsDialog(entries, defaults, save, projectName = null) 
       const paths = sandboxPathEntries(rows.map((row) => ({ path: row.path.value, write: row.write.checked })));
       await save(paths);
       return true;
+    },
+  });
+}
+
+/** Server-only TCP exceptions. Return the normalized server list, not the draft. */
+export function sandboxNetworkDialog(entries, save) {
+  const rows = [];
+  let list;
+  const add = (entry = { ip: '', port: '' }) => {
+    const wrap = el('div', 'sandbox-path-row');
+    const ip = field(wrap, 'IPv4 address', entry.ip, { mono: true });
+    ip.placeholder = '100.64.0.10';
+    const port = field(wrap, 'TCP port', entry.port, { mono: true });
+    port.inputMode = 'numeric';
+    port.placeholder = '443';
+    const remove = el('button', 'btn', 'Remove');
+    const row = { ip, port };
+    remove.addEventListener('click', () => {
+      rows.splice(rows.indexOf(row), 1);
+      wrap.remove();
+    });
+    wrap.appendChild(remove);
+    rows.push(row);
+    list.appendChild(wrap);
+    return ip;
+  };
+  return show({
+    title: 'Server sandbox network',
+    confirm: 'Save exceptions',
+    body: (body) => {
+      body.appendChild(el('div', 'dlg-note',
+        'Server-wide exceptions for both Pi and Claude. Each entry permits only the specified TCP port, '
+        + 'not other ports or UDP. If Gitea and agent-ui-server share an IP, allowing Gitea’s port does not allow the server’s port.'));
+      body.appendChild(el('div', 'dlg-note',
+        'Exact unicast IPv4 addresses only: no hostnames, CIDRs, IPv6, loopback, unspecified, reserved, multicast, '
+        + 'or 169.254.0.53 (sandbox DNS). TCP ports must be integers from 1 to 65535.'));
+      body.appendChild(el('div', 'dlg-note',
+        'Changes apply to newly launched sandboxed turns, not running turns. Empty means no private-network exceptions. '
+        + 'No effect with sandboxing disabled; direct user shell commands remain outside the sandbox.'));
+      body.appendChild(el('div', 'dlg-note warn',
+        'Exceptions expose services to sandboxed agents. Save replaces the entire server list; duplicate entries are collapsed by the server.'));
+      list = el('div');
+      body.appendChild(list);
+      for (const entry of entries) add(entry);
+      const buttons = el('div', 'dlg-buttons');
+      const plus = el('button', 'btn', '+ Add exception');
+      plus.addEventListener('click', () => add().focus());
+      const clear = el('button', 'btn', 'Clear all exceptions');
+      clear.addEventListener('click', () => {
+        rows.length = 0;
+        list.replaceChildren();
+      });
+      buttons.append(plus, clear);
+      body.appendChild(buttons);
+    },
+    collect: async () => {
+      const entries = sandboxNetworkEntries(rows.map((row) => ({ ip: row.ip.value, port: row.port.value })));
+      const response = await save(entries);
+      return response.sandbox_network_allowlist;
     },
   });
 }

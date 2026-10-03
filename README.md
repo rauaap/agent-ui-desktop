@@ -70,6 +70,15 @@ CSP intentionally allows only same-origin connections; the supported path is
   entries restores inheritance. Changes affect future sandboxed turns only;
   running agents retain their access. Read-only mounts can expose credentials,
   and writable mounts permit changing or deleting host data.
+- **Sandbox network** — Settings → Server sandbox network edits the server-wide
+  TCP exceptions using `GET`/`PATCH /sandbox-network`. Add/remove exact unicast
+  IPv4 + port rows and save the entire list; clearing removes all exceptions.
+  Only that TCP port is exposed, not other ports or UDP, even when Gitea and
+  agent-ui-server share an IP. Hostnames, CIDRs, IPv6 and special destinations
+  are rejected by the server; ports must be integers from 1 to 65535. Saved lists
+  use the server’s normalized response (duplicates collapse). Changes affect new
+  sandboxed turns for Pi and Claude, not running turns. No per-project/session
+  overrides or WebSocket settings event.
 - **Agent picker** — the new-session dialog offers the agents `GET /agents`
   says this server can run. Settings lets this browser remember which one to
   preselect; without that preference, the server’s default is used. Nothing is
@@ -109,7 +118,7 @@ CSP intentionally allows only same-origin connections; the supported path is
   new-session dialog, including
   worktree sessions. Session settings can change it between turns; changes save
   immediately and apply to the next agent turn without resetting the conversation.
-  This restricts agent file access, not networking or direct `!` commands, and is
+  This restricts agent file and network access, not direct `!` commands, and is
   independent of auto-approval. Other agents do not support it.
 - **Desktop notifications** — one switch in the sidebar watches the selected
   session while the app is in the background. It fires when a turn completes
@@ -587,6 +596,7 @@ client's `LineDiffTest`, `MarkdownTest` and `WorktreeTest`:
 node test/run.js          # any JS runtime
 node test/auth-tests.js   # token transport, mocked fetch/WebSocket
 node test/model-api-tests.js  # /agents catalogs, model and reasoning pickers
+node test/sandbox-network-dialog-tests.js  # network editor DOM smoke test
 ```
 
 or open `test/index.html` in a browser, which needs nothing installed at all.
