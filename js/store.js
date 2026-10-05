@@ -108,7 +108,7 @@ function blankState(id) {
     // project directory, but a detached session keeps its former worktree path
     // in `workingDir`; compare that with `projectPath` to tell the two apart.
     worktreeId: null,
-    agent: 'claude-code',
+    agent: 'Agent',
     // The model chosen at creation, or null for the agent's default. Fixed for
     // the session's lifetime.
     model: null,
