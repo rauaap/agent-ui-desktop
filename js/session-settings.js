@@ -8,12 +8,8 @@ export function settingsMeta(row) {
   };
 }
 
-export function supportsSandbox(agent) {
-  return agent === 'pi' || agent === 'claude-code';
-}
-
 export function canChangeSandbox(state) {
-  return supportsSandbox(state.agent) && typeof state.sandbox === 'boolean'
+  return typeof state.sandbox === 'boolean'
     && state.connected && state.settingsLoaded && state.sessionReady
     && !state.sandboxSaving
     && state.status !== 'running' && state.status !== 'awaiting_approval';

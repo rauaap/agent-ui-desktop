@@ -1,4 +1,4 @@
-import { SettingsSync, canChangeSandbox, settingsMeta, supportsSandbox } from '../js/session-settings.js';
+import { SettingsSync, canChangeSandbox, settingsMeta } from '../js/session-settings.js';
 import { Store } from '../js/store.js';
 import { sandboxNetworkEntries } from '../js/sandbox-network.js';
 
@@ -33,19 +33,12 @@ await test('sandbox: missing means unknown; false and unsupported-agent values s
   equal(settingsMeta({ agent: 'other', sandbox: true }).sandbox, true);
 });
 
-await test('sandbox: Pi and Claude Code support sandbox; unknown agents do not', () => {
-  equal(supportsSandbox('pi'), true);
-  equal(supportsSandbox('claude-code'), true);
-  equal(supportsSandbox('other'), false);
-  equal(supportsSandbox(undefined), false);
-});
-
-await test('sandbox: both supported agents require confirmed, idle, connected state', () => {
-  for (const agent of ['pi', 'claude-code']) {
+await test('sandbox: any agent requires confirmed, idle, connected state', () => {
+  for (const agent of ['pi', 'claude-code', 'other', undefined]) {
     const state = { ...ready(), agent };
     equal(canChangeSandbox(state), true);
     for (const override of [
-      { agent: 'other' }, { sandbox: null },
+      { sandbox: null },
       { status: 'running' }, { status: 'awaiting_approval' }, { connected: false },
       { settingsLoaded: false }, { sessionReady: false }, { sandboxSaving: true },
     ]) equal(canChangeSandbox({ ...state, ...override }), false);

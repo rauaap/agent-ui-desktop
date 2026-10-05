@@ -22,7 +22,7 @@ import {
 import { filedLabel, isArchived, partition } from './archive.js';
 import { suggestName } from './names.js';
 import { isBusy } from './store.js';
-import { canChangeSandbox, supportsSandbox } from './session-settings.js';
+import { canChangeSandbox } from './session-settings.js';
 import {
   DEFAULT_TEMPLATE,
   absolutize,
@@ -1259,11 +1259,6 @@ export function newSessionDialog(project, worktrees = [], agents = [], handlers 
       const sandboxField = el('div');
       sandboxToggle = toggle(sandboxField, 'Sandbox',
         'Restricts agent file access. Applies to agent turns, not direct shell commands.', true);
-      const paintSandbox = () => {
-        sandboxField.style.display = supportsSandbox(agentSelect?.value) ? '' : 'none';
-      };
-      agentSelect?.addEventListener('change', paintSandbox);
-      paintSandbox();
       body.appendChild(sandboxField);
 
       // Nowhere else for the session to run, so there is no choice to offer.
@@ -1365,7 +1360,7 @@ export function newSessionDialog(project, worktrees = [], agents = [], handlers 
         model: models.select.value,
         reasoningLevel: models.reasoning(),
         worktreeId: picked || null,
-        ...(supportsSandbox(agentSelect.value) ? { sandbox: sandboxToggle.checked } : {}),
+        sandbox: sandboxToggle.checked,
       };
       return handlers.onSubmit ? handlers.onSubmit(spec) : spec;
     },
@@ -1546,7 +1541,7 @@ export function sessionSettingsDialog(state, handlers = {}) {
         body.appendChild(wrap);
       }
 
-      if (supportsSandbox(state.agent)) {
+      {
         const sandboxToggle = toggle(body, 'Sandbox',
           'Restricts agent file access, not direct shell commands. Saves immediately. '
           + 'Sandbox can only be changed between turns.', state.sandbox === true);
@@ -1581,8 +1576,6 @@ export function sessionSettingsDialog(state, handlers = {}) {
         });
         unsubscribe = handlers.subscribe?.(paint);
         paint();
-      } else {
-        body.appendChild(el('div', 'dlg-note', 'Sandbox not supported for this agent'));
       }
 
       writeToggle = toggle(
