@@ -14,6 +14,7 @@ import {
 } from '../tools.js';
 import { toHtml } from './markdown.js';
 import { toolBody } from './toolformat.js';
+import { ScrollFollow } from './scroll-follow.js';
 
 /** Allow for fractional layout coordinates when deciding whether we are at the end. */
 const BOTTOM_EPSILON = 1;
@@ -55,14 +56,9 @@ export class TranscriptView {
     this.scrollButton.addEventListener('click', () => this.scrollToBottom());
     this.wrap.appendChild(this.scrollButton);
 
-    // This remembers the position from before a resize: by the time the observer
-    // runs, a formerly-bottomed transcript may already have grown beneath the
-    // viewport and can no longer be identified from its current geometry.
-    this.followBottom = true;
-    this.list.addEventListener('scroll', () => {
-      this.followBottom = this.isAtBottom();
-      this.updateScrollButton();
-    });
+    // Keyboard navigation belongs to the transcript, not the composer.
+    this.list.tabIndex = 0;
+    this.scrolling = new ScrollFollow(this.list, () => this.updateScrollButton());
 
     // Anything that changes the transcript's width or height reflows every row
     // and so moves the bottom: a zoom change, a window resize, the sidebar being
@@ -83,6 +79,7 @@ export class TranscriptView {
 
   destroy() {
     this.resizeObserver.disconnect();
+    this.scrolling.destroy();
     this.unsubscribe();
     this.unsubscribeDirectory();
     this.nodes.clear();
@@ -93,11 +90,9 @@ export class TranscriptView {
   /* ---------------------------------------------------------------- */
 
   applyChanges(changes) {
-    // Snapshot the geometry before touching the DOM. Content growth changes the
-    // answer, but should only be followed when the reader was already at the
-    // bottom. A reconnect reset represents the same conversation and follows
-    // the same rule instead of unconditionally jumping to the latest row.
-    const wasAtBottom = this.isAtBottom();
+    // Preserve following intent. The current geometry may already reflect a
+    // queue/header/composer resize whose observer has not run yet.
+    const wasAtBottom = this.followBottom;
     const previousScrollTop = this.list.scrollTop;
     let touched = false;
 
@@ -108,6 +103,7 @@ export class TranscriptView {
           return;
         case 'queue':
           this.renderQueue();
+          touched = true; // The queue changes the transcript viewport height.
           break;
         case 'append': {
           const node = this.build(change.row);
@@ -176,6 +172,10 @@ export class TranscriptView {
   /* scrolling                                                        */
   /* ---------------------------------------------------------------- */
 
+  get followBottom() {
+    return this.scrolling.followBottom;
+  }
+
   distanceFromBottom() {
     return this.list.scrollHeight - this.list.scrollTop - this.list.clientHeight;
   }
@@ -186,15 +186,12 @@ export class TranscriptView {
 
   /** Restore an offset after transcript content has been appended or replaced. */
   restoreScroll(wasAtBottom, scrollTop) {
-    this.followBottom = wasAtBottom;
-    if (wasAtBottom) this.list.scrollTop = this.list.scrollHeight;
-    else this.list.scrollTop = scrollTop;
+    this.scrolling.restore(wasAtBottom, scrollTop);
     this.updateScrollButton();
   }
 
   scrollToBottom() {
-    this.followBottom = true;
-    this.list.scrollTop = this.list.scrollHeight;
+    this.scrolling.jumpToBottom();
     this.updateScrollButton();
   }
 

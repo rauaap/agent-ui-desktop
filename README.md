@@ -597,9 +597,16 @@ node test/run.js          # any JS runtime
 node test/auth-tests.js   # token transport, mocked fetch/WebSocket
 node test/model-api-tests.js  # /agents catalogs, model and reasoning pickers
 node test/sandbox-network-dialog-tests.js  # network editor DOM smoke test
+node test/scroll-follow-tests.js  # user navigation vs incidental scrolling
 ```
 
 or open `test/index.html` in a browser, which needs nothing installed at all.
+
+`node test/scroll-browser-tests.js` additionally exercises replay/header resizing,
+single-line sends, queue resizing, and native wheel, keyboard, scrollbar and touch
+navigation in Chromium. It requires Puppeteer and a browser; set `PUPPETEER_MODULE`
+to a Puppeteer module entry file and `CHROME_EXECUTABLE` to a Chromium executable
+when they are installed outside this project.
 
 ## Differences from the Android client
 
