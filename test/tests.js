@@ -26,6 +26,7 @@ import { asProject, asSession, asWorktree, wireId } from '../js/ids.js';
 import { toHtml } from '../js/render/markdown.js';
 import { composerEntries, MessageHistory } from '../js/message-history.js';
 import { SessionDraft } from '../js/session-draft.js';
+import { SessionScroll } from '../js/session-scroll.js';
 import { Store, parseComposerInput, reduce, rowText } from '../js/store.js';
 import {
   actionSummary,
@@ -96,6 +97,36 @@ test('drafts: storage failures do not throw or mark unsaved text as saved', () =
   const unavailable = new SessionDraft('2', () => { throw new Error('Blocked'); });
   assertEqual(unavailable.saved, '');
   assertEqual(unavailable.save('text'), false);
+});
+
+test('scroll positions: exit saves per-session offsets and following intent without load-time writes', () => {
+  const storage = draftStorage();
+  const scroll = new SessionScroll('1', () => storage);
+  assertEqual(scroll.saved, null);
+  assertEqual(storage.entries.size, 0);
+  assertEqual(scroll.save({ scrollTop: 123.5, followBottom: false }), true);
+  assertEqual(new SessionScroll('1', () => storage).saved.scrollTop, 123.5);
+  assertEqual(new SessionScroll('1', () => storage).saved.followBottom, false);
+  assertEqual(new SessionScroll('2', () => storage).saved, null);
+  scroll.save({ scrollTop: 2000, followBottom: true });
+  assertEqual(new SessionScroll('1', () => storage).saved.followBottom, true);
+});
+
+test('scroll positions: malformed data and unavailable storage are harmless', () => {
+  const storage = draftStorage();
+  for (const value of ['broken', 'null', '{}', '[]', '{"scrollTop":-1,"followBottom":false}',
+    '{"scrollTop":"20","followBottom":false}', '{"scrollTop":20,"followBottom":"false"}']) {
+    storage.setItem('agent-ui.session-scroll.1', value);
+    assertEqual(new SessionScroll('1', () => storage).saved, null);
+  }
+  const scroll = new SessionScroll('1', () => storage);
+  scroll.save({ scrollTop: 20, followBottom: false });
+  storage.setItem = () => { throw Error('Full'); };
+  assertEqual(scroll.save({ scrollTop: 40, followBottom: true }), false);
+  assertEqual(scroll.saved.scrollTop, 20);
+  const unavailable = new SessionScroll('2', () => { throw Error('Blocked'); });
+  assertEqual(unavailable.saved, null);
+  assertEqual(unavailable.save({ scrollTop: 0, followBottom: true }), false);
 });
 
 test('sandbox paths preserve server expressions, spaces and permissions', () => {

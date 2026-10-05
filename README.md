@@ -307,6 +307,14 @@ key. Typing does not write to storage. Normal page reloads and closes also save
 synchronously via `beforeunload`, without a warning dialog. Browsers do not
 guarantee this event on every exit (for example, a force-close).
 
+The same session-exit and `beforeunload` paths save the transcript's scroll offset
+and bottom-following state per session. Returning waits for history replay to
+finish before restoring the offset; a session left following the bottom opens at
+the latest content instead. Navigation during replay cancels the pending restore.
+Scrolling itself does not write to storage. Offsets are in CSS pixels within the
+loaded history, so a changed replay window or text reflow may shift which message
+occupies the saved position; offsets beyond the available history are clamped.
+
 ### Project settings report; they do not edit
 
 The session gear saves — rename and the two auto-approve toggles are a `PATCH
@@ -603,7 +611,8 @@ node test/scroll-follow-tests.js  # user navigation vs incidental scrolling
 or open `test/index.html` in a browser, which needs nothing installed at all.
 
 `node test/scroll-browser-tests.js` additionally exercises replay/header resizing,
-single-line sends, queue resizing, and native wheel, keyboard, scrollbar and touch
+single-line sends, queue resizing, exit-time position persistence, and native
+wheel, keyboard, scrollbar and touch
 navigation in Chromium. It requires Puppeteer and a browser; set `PUPPETEER_MODULE`
 to a Puppeteer module entry file and `CHROME_EXECUTABLE` to a Chromium executable
 when they are installed outside this project.

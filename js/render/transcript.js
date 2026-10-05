@@ -30,7 +30,8 @@ export class TranscriptView {
   /**
    * @param {string} sessionId
    * @param {import('../store.js').Store} store
-   * @param {{onApproval: Function, onAnswers: Function, onOpenSession: Function}} handlers
+   * @param {{onApproval: Function, onAnswers: Function, onOpenSession: Function,
+   *   onNavigate?: Function}} handlers
    * @param {import('../inter-agent.js').SessionDirectory} directory
    */
   constructor(sessionId, store, handlers, directory) {
@@ -53,12 +54,16 @@ export class TranscriptView {
 
     this.scrollButton = el('button', 'scroll-down', '↓');
     this.scrollButton.title = 'Jump to the latest';
-    this.scrollButton.addEventListener('click', () => this.scrollToBottom());
+    this.scrollButton.addEventListener('click', () => {
+      this.handlers.onNavigate?.();
+      this.scrollToBottom();
+    });
     this.wrap.appendChild(this.scrollButton);
 
     // Keyboard navigation belongs to the transcript, not the composer.
     this.list.tabIndex = 0;
-    this.scrolling = new ScrollFollow(this.list, () => this.updateScrollButton());
+    this.scrolling = new ScrollFollow(this.list, () => this.updateScrollButton(),
+      () => this.handlers.onNavigate?.());
 
     // Anything that changes the transcript's width or height reflows every row
     // and so moves the bottom: a zoom change, a window resize, the sidebar being

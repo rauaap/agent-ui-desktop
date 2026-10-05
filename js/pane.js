@@ -22,6 +22,7 @@ import {
 } from './store.js';
 import { SessionSocket } from './socket.js';
 import { SessionDraft } from './session-draft.js';
+import { SessionScroll } from './session-scroll.js';
 import { TranscriptView } from './render/transcript.js';
 import { isFormerWorktree } from './worktree.js';
 
@@ -52,6 +53,8 @@ export class SessionPane {
     this.handlers = handlers;
     this.directory = directory;
     this.draft = new SessionDraft(sessionId);
+    this.scrollPosition = new SessionScroll(sessionId);
+    this.pendingScrollPosition = this.scrollPosition.saved;
 
     this.socket = new SessionSocket(sessionId, store, (event) => {
       handlers.onLiveEvent?.(sessionId, event);
@@ -83,6 +86,8 @@ export class SessionPane {
         }
       },
       onOpenSession: (id) => handlers.onOpenSession?.(id),
+      // Do not override navigation the reader makes while replay is loading.
+      onNavigate: () => { this.pendingScrollPosition = null; },
     }, directory);
     this.root.appendChild(this.transcript.wrap);
     this.root.appendChild(this.transcript.queueView);
@@ -91,7 +96,7 @@ export class SessionPane {
     this.root.appendChild(this.buildComposer());
     this.setComposerValue(this.draft.saved);
     // localStorage writes are synchronous, so normal page exits can save here.
-    this.onBeforeUnload = () => { this.draft.save(this.input.value); };
+    this.onBeforeUnload = () => { this.saveLocalState(); };
     window.addEventListener('beforeunload', this.onBeforeUnload);
 
     // Zoom and window resizes change the composer's viewport-relative growth
@@ -104,7 +109,10 @@ export class SessionPane {
     window.addEventListener('resize', this.onViewportChange);
 
     this.unsubscribe = store.subscribe(sessionId, (changes) => {
-      if (changes.some((c) => c.op === 'meta' || c.op === 'reset')) this.refresh();
+      if (changes.some((c) => c.op === 'meta' || c.op === 'reset')) {
+        this.refresh();
+        this.restoreSavedScroll();
+      }
       if (changes.some((c) => c.op === 'reset')) {
         const state = store.session(sessionId);
         this.messageHistory.replace(composerEntries([...state.rows, ...state.queue]));
@@ -508,9 +516,30 @@ export class SessionPane {
     if (!this.input.disabled) this.input.focus();
   }
 
+  restoreSavedScroll() {
+    if (!this.pendingScrollPosition || !this.store.session(this.id).sessionReady) return;
+    const { followBottom, scrollTop } = this.pendingScrollPosition;
+    this.pendingScrollPosition = null;
+    this.transcript.restoreScroll(followBottom, scrollTop);
+  }
+
+  saveLocalState() {
+    const unsaved = [];
+    if (!this.draft.save(this.input.value)) unsaved.push('draft');
+    // Leaving before replay finishes must not replace a saved offset with the
+    // temporary position in the partly loaded transcript.
+    const position = this.pendingScrollPosition ?? {
+      scrollTop: Math.max(0, this.transcript.list.scrollTop),
+      followBottom: this.transcript.followBottom,
+    };
+    if (!this.scrollPosition.save(position)) unsaved.push('scroll position');
+    return unsaved;
+  }
+
   destroy() {
-    if (!this.draft.save(this.input.value)) {
-      this.handlers.onError('The draft could not be saved in this browser');
+    const unsaved = this.saveLocalState();
+    if (unsaved.length) {
+      this.handlers.onError(`The ${unsaved.join(' and ')} could not be saved in this browser`);
     }
     window.removeEventListener('beforeunload', this.onBeforeUnload);
     window.removeEventListener('resize', this.onViewportChange);

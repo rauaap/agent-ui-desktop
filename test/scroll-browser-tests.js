@@ -140,6 +140,121 @@ try {
   await page.evaluate(() => workspace.openSession('2'));
   await settle();
   assert.equal((await page.evaluate(() => pane.transcript.scrolling.listeners.length)), 0, 'switching sessions removes old input listeners');
+  // Session/page exits share draft and scroll saving. Restore only once the
+  // initial replay is complete, and retain the old save if exited mid-replay.
+  await page.evaluate(() => {
+    window.openTestSession = id => {
+      workspace.openSession(id);
+      window.pane = workspace.pane;
+      window.view = pane.transcript;
+    };
+    window.replay = (id, start = 0, end = 60, finish = true) => {
+      if (start === 0) {
+        store.setConnected(id, true);
+        store.setMeta(id, { name: 'Saved reading position', workingDir: '/home/user/project' });
+      }
+      for (let i = start; i < end; i++) {
+        store.apply(id, { type: 'input', text: `Message ${i}` });
+        store.apply(id, { type: 'output', text: 'Reply '.repeat(100) });
+      }
+      if (finish) store.setMeta(id, { sessionReady: true });
+    };
+    openTestSession('7');
+    replay('7');
+  });
+  await settle();
+  await page.mouse.move(bounds.x, bounds.y);
+  await page.mouse.wheel({ deltaY: -350 });
+  await settle();
+  const savedReading = await page.evaluate(() => {
+    pane.input.value = 'unfinished draft';
+    return snapshot();
+  });
+  assert.equal(savedReading.follow, false);
+  assert.equal(await page.evaluate(() => localStorage.getItem('agent-ui.session-scroll.7')), null, 'scrolling does not write storage');
+  await page.evaluate(() => openTestSession('8'));
+  const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('agent-ui.session-scroll.7')));
+  assert.deepEqual(saved, { scrollTop: savedReading.top, followBottom: false }, 'session exit saves reading position');
+  assert.equal(await page.evaluate(() => localStorage.getItem('agent-ui.session-draft.7')), 'unfinished draft');
+  await page.evaluate(() => { openTestSession('7'); replay('7', 0, 5, false); });
+  assert.equal(await page.evaluate(() => pane.pendingScrollPosition.scrollTop), savedReading.top, 'wait for complete replay');
+  await page.evaluate(() => openTestSession('8'));
+  assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('agent-ui.session-scroll.7'))), saved, 'early exit does not overwrite saved position');
+  await page.evaluate(() => { openTestSession('7'); replay('7'); });
+  await settle();
+  assert.deepEqual(await page.evaluate(() => snapshot()), savedReading, 'returning restores reader offset and intent');
+  assert.equal(await page.evaluate(() => pane.input.value), 'unfinished draft', 'composer restore still works');
+
+  await page.evaluate(() => { pane.input.value = 'page exit draft'; window.dispatchEvent(new Event('beforeunload')); });
+  assert.equal(await page.evaluate(() => localStorage.getItem('agent-ui.session-draft.7')), 'page exit draft');
+  assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('agent-ui.session-scroll.7'))), saved, 'same beforeunload event saves position');
+  await page.evaluate(() => { pane.input.value = 'actual reload draft'; });
+  await page.reload(); // Also exercises the real beforeunload event.
+  await page.evaluate(async () => {
+    window.WebSocket = class extends EventTarget { static OPEN = 1; readyState = 1; close() {} send() {} };
+    const { Store } = await import('/js/store.js');
+    const { Workspace } = await import('/js/workspace.js');
+    window.store = new Store();
+    window.workspace = new Workspace({ panes: document.querySelector('#panes'), empty: document.querySelector('#empty') }, store,
+      { onError: message => { throw Error(message); } }, { subscribe: () => () => {}, lookup: () => ({ state: 'pending' }) });
+    workspace.openSession('7');
+    window.pane = workspace.pane;
+    window.view = pane.transcript;
+    store.setConnected('7', true);
+    store.setMeta('7', { name: 'Saved reading position', workingDir: '/home/user/project' });
+    for (let i = 0; i < 60; i++) {
+      store.apply('7', { type: 'input', text: `Message ${i}` });
+      store.apply('7', { type: 'output', text: 'Reply '.repeat(100) });
+    }
+    store.setMeta('7', { sessionReady: true });
+  });
+  await settle();
+  assert.deepEqual(await page.evaluate(() => ({ top: view.list.scrollTop, follow: view.followBottom })), { top: savedReading.top, follow: false }, 'page reload restores after replay');
+  assert.equal(await page.evaluate(() => pane.input.value), 'actual reload draft');
+
+  // Saving at the bottom follows the NEW bottom, not yesterday's pixel offset.
+  await page.click('.scroll-down');
+  await settle();
+  await page.evaluate(() => {
+    workspace.openSession('8');
+    workspace.openSession('7');
+    window.pane = workspace.pane;
+    window.view = pane.transcript;
+    store.setConnected('7', true);
+    for (let i = 0; i < 80; i++) {
+      store.apply('7', { type: 'input', text: `Message ${i}` });
+      store.apply('7', { type: 'output', text: 'Reply '.repeat(100) });
+    }
+    store.setMeta('7', { sessionReady: true });
+  });
+  await settle();
+  assert.equal(await page.evaluate(() => view.isAtBottom()), true, 'saved following resumes at latest content');
+  await page.evaluate(() => {
+    workspace.openSession('8');
+    workspace.openSession('7');
+    window.pane = workspace.pane;
+    window.view = pane.transcript;
+    store.setConnected('7', true);
+    for (let i = 0; i < 5; i++) {
+      store.apply('7', { type: 'input', text: `Message ${i}` });
+      store.apply('7', { type: 'output', text: 'Reply '.repeat(100) });
+    }
+  });
+  await settle();
+  await page.mouse.move(bounds.x, bounds.y);
+  await page.mouse.wheel({ deltaY: -150 });
+  await settle();
+  const duringReplay = await page.evaluate(() => ({ top: view.list.scrollTop, pending: pane.pendingScrollPosition }));
+  assert.equal(duringReplay.pending, null, 'navigation cancels pending restoration');
+  await page.evaluate(() => {
+    for (let i = 5; i < 80; i++) {
+      store.apply('7', { type: 'input', text: `Message ${i}` });
+      store.apply('7', { type: 'output', text: 'Reply '.repeat(100) });
+    }
+    store.setMeta('7', { sessionReady: true });
+  });
+  await settle();
+  assert.equal(await page.evaluate(() => view.list.scrollTop), duringReplay.top, 'replay completion does not override user navigation');
   console.log('Scroll browser regressions passed');
 } finally {
   if (browser) await browser.close();

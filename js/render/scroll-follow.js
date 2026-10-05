@@ -4,9 +4,10 @@ const SCROLL_KEYS = new Set(['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home
 const UPWARD_KEYS = new Set(['ArrowUp', 'PageUp', 'Home']);
 
 export class ScrollFollow {
-  constructor(list, onScroll = () => {}) {
+  constructor(list, onScroll = () => {}, onNavigate = () => {}) {
     this.list = list;
     this.onScroll = onScroll;
+    this.onNavigate = onNavigate;
     this.followBottom = true;
     this.lastTop = list.scrollTop;
     this.userUntil = 0;
@@ -91,6 +92,7 @@ export class ScrollFollow {
   }
 
   navigation(leavingBottom) {
+    this.onNavigate();
     this.userUntil = performance.now() + SCROLL_INPUT_GRACE_MS;
     // Stop following before the native scroll runs, so a simultaneous output
     // update cannot pull an upward wheel/key/touch gesture back to the bottom.
