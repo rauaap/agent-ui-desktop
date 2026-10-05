@@ -1,0 +1,35 @@
+import assert from 'node:assert/strict';
+
+globalThis.location = { protocol: 'file:', origin: 'null', search: '?api=https://server.example:8443/' };
+globalThis.localStorage = { getItem: () => 'test-token' };
+const calls = [];
+let status = 200;
+let body = { asset_root: 'notes', path: '/notes', project_id: 42, url: '/shared-assets/notes/' };
+globalThis.fetch = async (url, options) => {
+  calls.push({ url, method: options.method, body: options.body ? JSON.parse(options.body) : undefined });
+  assert.equal(options.headers.get('Authorization'), 'Bearer test-token');
+  return { status, ok: status < 400, text: async () => status === 204 ? '' : JSON.stringify(body) };
+};
+const api = await import('../js/api.js');
+const root = body;
+body = [root, { ...root, project_id: null }];
+assert.deepEqual((await api.listSharedAssetRoots()).map((r) => r.project_id), ['42', null]);
+assert.equal(calls.at(-1).url, 'https://server.example:8443/shared-asset-roots');
+body = root;
+assert.equal((await api.createSharedAssetRoot({ asset_root: 'notes', path: '/notes', project_id: '42' })).project_id, '42');
+assert.deepEqual(calls.at(-1).body, { asset_root: 'notes', path: '/notes', project_id: 42 });
+await api.createSharedAssetRoot({ asset_root: 'global', path: '/global' });
+assert.equal(calls.at(-1).body.project_id, null);
+await api.updateSharedAssetRoot('old/name', { asset_root: 'renamed', project_id: null });
+assert.equal(calls.at(-1).url, 'https://server.example:8443/shared-asset-roots/old%2Fname');
+assert.equal(calls.at(-1).method, 'PATCH');
+assert.deepEqual(calls.at(-1).body, { asset_root: 'renamed', project_id: null });
+await api.updateSharedAssetRoot('notes', { path: '/new' });
+assert.deepEqual(calls.at(-1).body, { path: '/new' });
+status = 409;
+body = { detail: 'Identifier already registered' };
+await assert.rejects(api.updateSharedAssetRoot('notes', { asset_root: 'existing' }), /Identifier already registered/);
+status = 204;
+assert.equal(await api.deleteSharedAssetRoot('notes'), null);
+assert.equal(calls.at(-1).method, 'DELETE');
+console.log('Shared-assets REST: CRUD, identifier encoding, project IDs/null/omission, server errors, file-mode API base passed');

@@ -21,6 +21,8 @@ import { Workspace } from './workspace.js';
 import { Notifier } from './notify.js';
 import {
   appSettingsDialog,
+  sharedAssetsDialog,
+  sharedAssetEditorDialog,
   sandboxPathsDialog,
   sandboxNetworkDialog,
   confirmDialog,
@@ -413,7 +415,8 @@ async function openProjectSettings(project) {
       await setProjectArchived(current, archiving);
       return;
     }
-    if (result?.action === 'sandbox-paths') await openSandboxPaths(current);
+    if (result?.action === 'shared-assets') await openSharedAssets(current);
+    else if (result?.action === 'sandbox-paths') await openSandboxPaths(current);
     else if (result?.action === 'worktree-new') await createWorktreeFor(current, '');
     else if (result?.action === 'worktree-delete') await removeWorktree(result.worktree);
     else return;
@@ -948,9 +951,36 @@ async function openAppSettings() {
   if (!result) return;
   setWorktreeTemplate(result.template);
   if (result.agent !== undefined) setAgentPreference(result.agent);
+  if (result.action === 'shared-assets') await openSharedAssets();
   if (result.action === 'sandbox-paths') await openSandboxPaths();
   if (result.action === 'sandbox-network') await openSandboxNetwork();
   if (result.action === 'server-token') showTokenPrompt(false, true);
+}
+
+async function openSharedAssets(project = null) {
+  try {
+    for (;;) {
+      const roots = (await api.listSharedAssetRoots()).filter((root) =>
+        root.project_id === (project ? String(project.id) : null));
+      const result = await sharedAssetsDialog(roots, (root) => {
+        window.open(new URL(root.url, api.httpBase).href, '_blank', 'noopener,noreferrer');
+      }, project ? project.name || project.path : null);
+      if (!result) return;
+      if (result.action === 'delete') {
+        const confirmed = await confirmDialog(
+          `Unregister “${result.root.asset_root}”?`,
+          'Existing links will stop working. Files remain untouched.', 'Unregister', true,
+        );
+        if (confirmed) await api.deleteSharedAssetRoot(result.root.asset_root);
+      } else {
+        await sharedAssetEditorDialog(result.root, (values) => result.action === 'create'
+          ? api.createSharedAssetRoot({ ...values, project_id: project?.id ?? null })
+          : api.updateSharedAssetRoot(result.root.asset_root, values));
+      }
+    }
+  } catch (error) {
+    fail(error);
+  }
 }
 
 async function openSandboxNetwork() {

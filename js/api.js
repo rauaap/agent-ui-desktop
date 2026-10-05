@@ -120,6 +120,25 @@ export const setSandboxPaths = (sandbox_paths) =>
 export const setProjectSandboxPaths = (path, sandbox_paths) =>
   request('PATCH', '/projects', { path, sandbox_paths }).then(asProject);
 
+const asAssetRoot = (root) => ({
+  ...root, project_id: root.project_id == null ? null : String(root.project_id),
+});
+export const listSharedAssetRoots = () =>
+  request('GET', '/shared-asset-roots').then(each(asAssetRoot));
+export const createSharedAssetRoot = (root) => request('POST', '/shared-asset-roots', {
+  ...root, project_id: root.project_id == null ? null : wireId(root.project_id),
+}).then(asAssetRoot);
+export const updateSharedAssetRoot = (name, changes) => request(
+  'PATCH', `/shared-asset-roots/${encodeURIComponent(name)}`, {
+    ...changes,
+    ...('project_id' in changes ? {
+      project_id: changes.project_id == null ? null : wireId(changes.project_id),
+    } : {}),
+  },
+).then(asAssetRoot);
+export const deleteSharedAssetRoot = (name) =>
+  request('DELETE', `/shared-asset-roots/${encodeURIComponent(name)}`);
+
 export const listProjects = () => request('GET', '/projects').then(each(asProject));
 
 export const createProject = (path, name) =>

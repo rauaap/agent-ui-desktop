@@ -23,7 +23,8 @@ const isDigit = (ch) => ch >= '0' && ch <= '9';
 const isWordChar = (ch) => /[A-Za-z0-9]/.test(ch);
 
 /** Render a markdown string to an HTML string. */
-export function toHtml(md) {
+export function toHtml(md, serverBase = null) {
+  const inline = (source) => renderInline(source, serverBase);
   const lines = String(md ?? '').split('\n');
   const out = [];
 
@@ -275,7 +276,8 @@ function delimiterRow(line) {
  * Parse inline markers within one line. Recursive, so emphasis nests; inline
  * code wins over everything inside it.
  */
-function inline(source) {
+function renderInline(source, serverBase) {
+  const inline = (text) => renderInline(text, serverBase);
   const s = String(source);
   const n = s.length;
   let out = '';
@@ -323,7 +325,9 @@ function inline(source) {
         const paren = s.indexOf(')', close + 2);
         if (paren > close) {
           const text = inline(s.slice(i + 1, close));
-          const href = s.slice(close + 2, paren).trim();
+          const target = s.slice(close + 2, paren).trim();
+          const href = serverBase && target.startsWith('/shared-assets/')
+            ? new URL(target, serverBase).href : target;
           out += SAFE_SCHEME.test(href)
             ? `<a href="${escapeHtml(href)}" target="_blank" rel="noreferrer noopener">${text}</a>`
             : text;

@@ -6,6 +6,7 @@
  * through its lightweight metadata poll.
  */
 
+import { httpBase } from './auth.js';
 import { filedLabel } from './archive.js';
 import { idChip } from './clipboard.js';
 import {
@@ -75,6 +76,7 @@ export class SessionPane {
     this.root.appendChild(this.buildHead());
 
     this.transcript = new TranscriptView(sessionId, store, {
+      serverBase: httpBase,
       onApproval: (requestId, optionId, behavior, message) => {
         if (!this.socket.sendApproval(requestId, behavior, optionId, message)) {
           handlers.onError('Not connected — the answer was not sent');

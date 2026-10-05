@@ -31,7 +31,7 @@ export class TranscriptView {
    * @param {string} sessionId
    * @param {import('../store.js').Store} store
    * @param {{onApproval: Function, onAnswers: Function, onOpenSession: Function,
-   *   onNavigate?: Function}} handlers
+   *   onNavigate?: Function, serverBase?: string}} handlers
    * @param {import('../inter-agent.js').SessionDirectory} directory
    */
   constructor(sessionId, store, handlers, directory) {
@@ -125,7 +125,7 @@ export class TranscriptView {
           if (change.row.kind === 'agent') {
             const md = existing.querySelector('.md');
             if (md) {
-              md.innerHTML = toHtml(change.row.text);
+              md.innerHTML = toHtml(change.row.text, this.handlers.serverBase);
               this.applyQueryTo(existing, change.row);
               touched = true;
               break;
@@ -413,7 +413,7 @@ export class TranscriptView {
   buildAgent(row) {
     const wrap = el('div', 'row msg-agent');
     const body = el('div', 'md');
-    body.innerHTML = toHtml(row.text);
+    body.innerHTML = toHtml(row.text, this.handlers.serverBase);
     wrap.appendChild(body);
 
     // Copies the raw markdown, not the rendered text — the source is what you

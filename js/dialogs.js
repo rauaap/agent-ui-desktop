@@ -305,6 +305,9 @@ export function appSettingsDialog(template, sampleProject, agents = [], agent = 
       const network = el('button', 'btn', 'Server sandbox network…');
       network.addEventListener('click', () => { action = 'sandbox-network'; submit(); });
       body.appendChild(network);
+      const assets = el('button', 'btn', 'Server shared assets…');
+      assets.addEventListener('click', () => { action = 'shared-assets'; submit(); });
+      body.appendChild(assets);
       body.appendChild(el('div', 'dlg-label', 'Browser preferences'));
       if (agents.length) {
         const wrap = el('div', 'field');
@@ -352,6 +355,66 @@ export function appSettingsDialog(template, sampleProject, agents = [], agent = 
       template: input.value.trim() || DEFAULT_TEMPLATE,
       agent: agentSelect ? agentSelect.value : undefined,
     }),
+  });
+}
+
+/** Registrations only: actions never create, move, or delete files. */
+export function sharedAssetsDialog(roots, open, projectName = null) {
+  let result = null;
+  return show({
+    title: projectName === null ? 'Server shared assets' : `Shared assets — ${projectName}`,
+    confirm: 'Close',
+    dismissOnly: true,
+    body: (body, submit) => {
+      body.appendChild(el('div', 'dlg-note warn',
+        'Anyone who can reach the server can read files in these directories. '
+        + 'Registration does not grant agents sandbox access. Changes never move or delete files.'));
+      if (!roots.length) body.appendChild(el('div', 'dlg-note', 'No shared asset roots registered.'));
+      for (const root of roots) {
+        const row = el('div', 'sandbox-inherited');
+        row.appendChild(el('div', 'mono', root.asset_root));
+        row.appendChild(el('div', 'mono', root.path));
+        const buttons = el('div', 'dlg-buttons');
+        const visit = el('button', 'btn small', 'Open');
+        visit.addEventListener('click', () => open(root));
+        buttons.appendChild(visit);
+        for (const [action, label] of [['edit', 'Edit…'], ['delete', 'Unregister…']]) {
+          const button = el('button', 'btn small', label);
+          button.addEventListener('click', () => { result = { action, root }; submit(); });
+          buttons.appendChild(button);
+        }
+        row.appendChild(buttons);
+        body.appendChild(row);
+      }
+      body.appendChild(el('div', 'dlg-note', 'Open requires an index.html in the directory; otherwise the server returns 404.'));
+      const add = el('button', 'btn', '+  Register directory…');
+      add.addEventListener('click', () => { result = { action: 'create' }; submit(); });
+      body.appendChild(add);
+    },
+    collect: () => result,
+  });
+}
+
+export function sharedAssetEditorDialog(root, save) {
+  let name;
+  let path;
+  return show({
+    title: root ? 'Edit shared asset root' : 'Register shared asset directory',
+    confirm: 'Save',
+    body: (body) => {
+      name = field(body, 'URL identifier', root?.asset_root || '', {
+        mono: true, hint: 'ASCII letters, digits, underscores and hyphens only. Renaming breaks existing links.',
+      });
+      path = field(body, 'Absolute server directory', root?.path || '', {
+        mono: true, hint: 'The directory need not exist. No ~ or environment-variable expansion.',
+      });
+    },
+    collect: async () => {
+      const asset_root = name.value.trim();
+      if (!/^[A-Za-z0-9_-]+$/.test(asset_root)) throw new Error('Enter a valid URL identifier.');
+      if (!path.value.startsWith('/')) throw new Error('Enter an absolute server directory.');
+      return save({ asset_root, path: path.value });
+    },
   });
 }
 
@@ -671,6 +734,9 @@ export function projectSettingsDialog(project, sessions, worktrees = [], busy = 
       const paths = el('button', 'btn', 'Sandbox paths…');
       paths.addEventListener('click', () => { action = 'sandbox-paths'; submit(); });
       buttons.appendChild(paths);
+      const assets = el('button', 'btn', 'Shared assets…');
+      assets.addEventListener('click', () => { action = 'shared-assets'; submit(); });
+      buttons.appendChild(assets);
 
       // An archived project takes a 409 for either of these, so they are hidden
       // rather than offered and refused — the same rule the worktree button

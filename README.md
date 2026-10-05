@@ -605,6 +605,8 @@ node test/run.js          # any JS runtime
 node test/auth-tests.js   # token transport, mocked fetch/WebSocket
 node test/model-api-tests.js  # /agents catalogs, model and reasoning pickers
 node test/sandbox-network-dialog-tests.js  # network editor DOM smoke test
+node test/shared-assets-tests.js  # shared assets dialogs and server-relative Markdown links
+node test/shared-assets-api-tests.js  # shared asset CRUD transport
 node test/scroll-follow-tests.js  # user navigation vs incidental scrolling
 ```
 
