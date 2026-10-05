@@ -476,7 +476,7 @@ export function sandboxPathsDialog(entries, defaults, save, projectName = null) 
         + 'expand using the server’s home and environment, not this browser. Expanded paths must be absolute and exist.'));
       body.appendChild(el('div', 'dlg-note', project
         ? 'Applies to future turns in this project’s sandboxed sessions and worktrees. Clearing project entries restores all server defaults; inherited paths cannot be removed.'
-        : 'Applies to future turns across all sandboxed sessions, for both Pi and Claude.'));
+        : 'Applies to future turns across all sandboxed sessions.'));
       body.appendChild(el('div', 'dlg-note',
         'Saving does not restart agents or revoke access from running turns. No effect with sandboxing disabled; direct user shell commands remain outside the sandbox.'));
       body.appendChild(el('div', 'dlg-note warn',
@@ -543,7 +543,7 @@ export function sandboxNetworkDialog(entries, save) {
     confirm: 'Save exceptions',
     body: (body) => {
       body.appendChild(el('div', 'dlg-note',
-        'Server-wide exceptions for both Pi and Claude. Each entry permits only the specified TCP port, '
+        'Server-wide exceptions for agents. Each entry permits only the specified TCP port, '
         + 'not other ports or UDP. If Gitea and agent-ui-server share an IP, allowing Gitea’s port does not allow the server’s port.'));
       body.appendChild(el('div', 'dlg-note',
         'Exact unicast IPv4 addresses only: no hostnames, CIDRs, IPv6, loopback, unspecified, reserved, multicast, '
