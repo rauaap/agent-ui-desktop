@@ -255,13 +255,17 @@ export class SessionPane {
         return;
       }
       if (!event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey
-          && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
+          && (event.key === 'ArrowUp' || event.key === 'ArrowDown')
+          && this.input.selectionStart === this.input.selectionEnd
+          && (event.key === 'ArrowUp'
+            ? this.input.selectionStart === 0
+            : this.input.selectionEnd === this.input.value.length)) {
         const value = event.key === 'ArrowUp'
           ? this.messageHistory.previous(this.input.value)
           : this.messageHistory.next();
         if (value !== null) {
           event.preventDefault();
-          this.setComposerValue(value);
+          this.setComposerValue(value, event.key === 'ArrowUp' ? 0 : value.length);
         }
         return;
       }
@@ -300,9 +304,9 @@ export class SessionPane {
   }
 
   /** Replace composer text while keeping its derived styling and size current. */
-  setComposerValue(value) {
+  setComposerValue(value, cursor = value.length) {
     this.input.value = value;
-    this.input.setSelectionRange(value.length, value.length);
+    this.input.setSelectionRange(cursor, cursor);
     this.autoGrow();
     this.paintMode();
   }
