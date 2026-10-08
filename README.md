@@ -72,13 +72,18 @@ CSP intentionally allows only same-origin connections; the supported path is
   and writable mounts permit changing or deleting host data.
 - **Sandbox network** — Settings → Server sandbox network edits the server-wide
   TCP exceptions using `GET`/`PATCH /sandbox-network`. Add/remove exact unicast
-  IPv4 + port rows and save the entire list; clearing removes all exceptions.
+  IPv4 + port rows and save the entire list; clearing removes server-level exceptions.
+  Project settings → Sandbox network edits that project’s own list via `PATCH /projects`.
+  Server exceptions are inherited and cannot be removed by a project; effective access
+  is the union of both lists. Resetting the project list to empty restores server
+  inheritance only. Project responses include their own `sandbox_network_allowlist`;
+  `POST /projects` optionally accepts it, while omission in `PATCH /projects` leaves it unchanged.
   Only that TCP port is exposed, not other ports or UDP, even when Gitea and
   agent-ui-server share an IP. Hostnames, CIDRs, IPv6 and special destinations
   are rejected by the server; ports must be integers from 1 to 65535. Saved lists
   use the server’s normalized response (duplicates collapse). Changes affect new
-  sandboxed turns for Pi and Claude, not running turns. No per-project/session
-  overrides or WebSocket settings event.
+  sandboxed turns for Pi and Claude, including parent-project worktree sessions,
+  not running turns. There is no per-session list or WebSocket settings event.
 - **Agent picker** — the new-session dialog offers the agents `GET /agents`
   says this server can run. Settings lets this browser remember which one to
   preselect; without that preference, the server’s default is used. Nothing is

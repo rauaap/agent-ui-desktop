@@ -112,6 +112,10 @@ export const getSandboxNetwork = () => request('GET', '/sandbox-network');
 export const setSandboxNetwork = (sandbox_network_allowlist) =>
   request('PATCH', '/sandbox-network', { sandbox_network_allowlist });
 
+/** Project-owned entries only; [] restores server inheritance. */
+export const setProjectSandboxNetwork = (path, sandbox_network_allowlist) =>
+  request('PATCH', '/projects', { path, sandbox_network_allowlist }).then(asProject);
+
 export const getSandboxPaths = () => request('GET', '/sandbox-paths');
 
 export const setSandboxPaths = (sandbox_paths) =>
@@ -141,8 +145,11 @@ export const deleteSharedAssetRoot = (name) =>
 
 export const listProjects = () => request('GET', '/projects').then(each(asProject));
 
-export const createProject = (path, name) =>
-  request('POST', '/projects', { path, name }).then(asProject);
+export const createProject = (path, name, sandbox_network_allowlist) =>
+  request('POST', '/projects', {
+    path, name,
+    ...(sandbox_network_allowlist === undefined ? {} : { sandbox_network_allowlist }),
+  }).then(asProject);
 
 /**
  * Archive or unarchive a project. Addressed by `path` in the body, like

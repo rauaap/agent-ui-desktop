@@ -417,6 +417,7 @@ async function openProjectSettings(project) {
     }
     if (result?.action === 'shared-assets') await openSharedAssets(current);
     else if (result?.action === 'sandbox-paths') await openSandboxPaths(current);
+    else if (result?.action === 'sandbox-network') await openSandboxNetwork(current);
     else if (result?.action === 'worktree-new') await createWorktreeFor(current, '');
     else if (result?.action === 'worktree-delete') await removeWorktree(result.worktree);
     else return;
@@ -983,12 +984,28 @@ async function openSharedAssets(project = null) {
   }
 }
 
-async function openSandboxNetwork() {
+async function openSandboxNetwork(project = null) {
   try {
-    // Always load afresh: no WebSocket event or cached empty fallback.
-    const settings = await api.getSandboxNetwork();
-    const saved = await sandboxNetworkDialog(settings.sandbox_network_allowlist, api.setSandboxNetwork);
-    if (saved !== null) toast(`${saved.length} sandbox network exceptions saved for future turns`);
+    // Always load both scopes afresh: no WebSocket event or cached empty fallback.
+    const [settings, latest] = await Promise.all([
+      api.getSandboxNetwork(),
+      project ? api.listProjects() : Promise.resolve(null),
+    ]);
+    const current = project ? latest.find((p) => p.id === project.id) : null;
+    if (project && !current) throw new Error('The project no longer exists');
+    const saved = await sandboxNetworkDialog(
+      current ? current.sandbox_network_allowlist : settings.sandbox_network_allowlist,
+      current ? (entries) => api.setProjectSandboxNetwork(current.path, entries) : api.setSandboxNetwork,
+      current ? current.name || current.path : null,
+      current ? settings.sandbox_network_allowlist : [],
+    );
+    if (saved !== null) {
+      toast(`${saved.length} ${current ? 'project' : 'server'} sandbox network exceptions saved for future turns`);
+      if (current) {
+        // Use the returned scope (including server deduplication) immediately.
+        projects = projects.map((p) => p.id === current.id ? { ...p, sandbox_network_allowlist: saved } : p);
+      }
+    }
   } catch (error) {
     fail(error);
   }

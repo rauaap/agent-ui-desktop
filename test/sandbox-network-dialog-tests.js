@@ -1,6 +1,6 @@
 /** Minimal DOM smoke test: node test/sandbox-network-dialog-tests.js */
 import assert from 'node:assert/strict';
-import { sandboxNetworkDialog, appSettingsDialog } from '../js/dialogs.js';
+import { sandboxNetworkDialog, appSettingsDialog, projectSettingsDialog } from '../js/dialogs.js';
 
 class Node {
   constructor(tag) {
@@ -66,6 +66,34 @@ try {
   await button('Cancel').emit('click');
   assert.equal(await cancelled, null);
   assert.equal(saved, false);
+
+  const inherited = { ip: '100.64.0.20', port: 22 };
+  const projectResult = sandboxNetworkDialog([entry], async (entries) => {
+    assert.deepEqual(entries, [entry, entry]); // Never submit inherited rows.
+    return { sandbox_network_allowlist: [entry] };
+  }, 'Example', [inherited]);
+  assert.equal(inputs().length, 2);
+  assert.ok(descendants(dialog()).some((node) => node.textContent === '100.64.0.20:22 (TCP)'));
+  assert.ok(descendants(dialog()).some((node) => node.textContent?.includes('cannot be removed at project level')));
+  await button('+ Add exception').emit('click');
+  inputs()[2].value = entry.ip;
+  inputs()[3].value = '443';
+  await button('Save exceptions').emit('click');
+  assert.deepEqual(await projectResult, [entry]);
+
+  const reset = sandboxNetworkDialog([entry], async (entries) => {
+    assert.deepEqual(entries, []);
+    return { sandbox_network_allowlist: [] };
+  }, 'Example', [inherited]);
+  await button('Reset to server inheritance').emit('click');
+  assert.equal(inputs().length, 0);
+  assert.ok(descendants(dialog()).some((node) => node.textContent === '100.64.0.20:22 (TCP)'));
+  await button('Save exceptions').emit('click');
+  assert.deepEqual(await reset, []);
+
+  const projectSettings = projectSettingsDialog({ id: '7', name: 'Example', path: '/project' }, []);
+  await button('Sandbox network…').emit('click');
+  assert.equal((await projectSettings).action, 'sandbox-network');
 
   const settings = appSettingsDialog(null, '/project');
   await button('Server sandbox network…').emit('click');

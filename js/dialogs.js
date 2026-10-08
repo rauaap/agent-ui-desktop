@@ -516,8 +516,9 @@ export function sandboxPathsDialog(entries, defaults, save, projectName = null) 
   });
 }
 
-/** Server-only TCP exceptions. Return the normalized server list, not the draft. */
-export function sandboxNetworkDialog(entries, save) {
+/** Edit one scope; return its normalized saved list, not the draft or effective union. */
+export function sandboxNetworkDialog(entries, save, projectName = null, defaults = []) {
+  const project = projectName !== null;
   const rows = [];
   let list;
   const add = (entry = { ip: '', port: '' }) => {
@@ -539,27 +540,39 @@ export function sandboxNetworkDialog(entries, save) {
     return ip;
   };
   return show({
-    title: 'Server sandbox network',
+    title: project ? `Sandbox network — ${projectName}` : 'Server sandbox network',
     confirm: 'Save exceptions',
     body: (body) => {
       body.appendChild(el('div', 'dlg-note',
-        'Server-wide exceptions for agents. Each entry permits only the specified TCP port, '
+        (project ? 'Project exceptions for agents. ' : 'Server-wide exceptions for agents. ')
+        + 'Each entry permits only the specified TCP port, '
         + 'not other ports or UDP. If Gitea and agent-ui-server share an IP, allowing Gitea’s port does not allow the server’s port.'));
       body.appendChild(el('div', 'dlg-note',
         'Exact unicast IPv4 addresses only: no hostnames, CIDRs, IPv6, loopback, unspecified, reserved, multicast, '
         + 'or 169.254.0.53 (sandbox DNS). TCP ports must be integers from 1 to 65535.'));
       body.appendChild(el('div', 'dlg-note',
-        'Changes apply to newly launched sandboxed turns, not running turns. Empty means no private-network exceptions. '
+        'Changes apply to newly launched sandboxed turns for both agents, including worktree sessions, not running turns. '
+        + (project ? 'Empty means server inheritance only. ' : 'Empty means no server-level exceptions; project exceptions may still apply. ')
         + 'No effect with sandboxing disabled; direct user shell commands remain outside the sandbox.'));
       body.appendChild(el('div', 'dlg-note warn',
-        'Exceptions expose services to sandboxed agents. Save replaces the entire server list; duplicate entries are collapsed by the server.'));
+        `Exceptions expose services to sandboxed agents. Save replaces the entire ${project ? 'project' : 'server'} list; duplicate entries are collapsed by the server.`));
+      if (project) {
+        body.appendChild(el('div', 'dlg-label', 'Inherited server exceptions'));
+        body.appendChild(el('div', 'dlg-note',
+          'Effective exceptions are the union of server and project IP/port pairs. Server exceptions are inherited and cannot be removed at project level.'));
+        for (const entry of defaults) {
+          body.appendChild(el('div', 'sandbox-inherited mono', `${entry.ip}:${entry.port} (TCP)`));
+        }
+        if (!defaults.length) body.appendChild(el('div', 'dlg-note', 'No server exceptions.'));
+      }
+      body.appendChild(el('div', 'dlg-label', project ? 'Project exceptions' : 'Server exceptions'));
       list = el('div');
       body.appendChild(list);
       for (const entry of entries) add(entry);
       const buttons = el('div', 'dlg-buttons');
       const plus = el('button', 'btn', '+ Add exception');
       plus.addEventListener('click', () => add().focus());
-      const clear = el('button', 'btn', 'Clear all exceptions');
+      const clear = el('button', 'btn', project ? 'Reset to server inheritance' : 'Clear all exceptions');
       clear.addEventListener('click', () => {
         rows.length = 0;
         list.replaceChildren();
@@ -734,6 +747,9 @@ export function projectSettingsDialog(project, sessions, worktrees = [], busy = 
       const paths = el('button', 'btn', 'Sandbox paths…');
       paths.addEventListener('click', () => { action = 'sandbox-paths'; submit(); });
       buttons.appendChild(paths);
+      const network = el('button', 'btn', 'Sandbox network…');
+      network.addEventListener('click', () => { action = 'sandbox-network'; submit(); });
+      buttons.appendChild(network);
       const assets = el('button', 'btn', 'Shared assets…');
       assets.addEventListener('click', () => { action = 'shared-assets'; submit(); });
       buttons.appendChild(assets);

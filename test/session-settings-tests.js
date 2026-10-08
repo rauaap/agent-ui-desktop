@@ -280,6 +280,42 @@ await test('sandbox network API: full replacements, normalized response, and rea
   } finally { globalThis.fetch = original; }
 });
 
+await test('project sandbox network API: own scope survives reads; optional create and replacement PATCH', async () => {
+  const original = globalThis.fetch;
+  const calls = [];
+  const entries = [{ ip: '100.64.0.10', port: 443 }];
+  const project = { id: 7, path: '/app', sandbox_network_allowlist: entries };
+  globalThis.fetch = async (url, options) => {
+    const path = new URL(url).pathname;
+    calls.push({ path, method: options.method,
+      body: options.body === undefined ? undefined : JSON.parse(options.body) });
+    return { ok: true, text: async () => JSON.stringify(options.method === 'GET' ? [project] : project) };
+  };
+  try {
+    equal((await api.listProjects())[0], { ...project, id: '7' });
+    equal((await api.createProject('/app', 'App', entries)).sandbox_network_allowlist, entries);
+    await api.createProject('/app', 'App');
+    await api.createProject('/app', 'App', []);
+    equal((await api.setProjectSandboxNetwork('/app', [...entries, ...entries])).sandbox_network_allowlist, entries);
+    await api.setProjectSandboxNetwork('/app', []);
+    await api.setProjectArchived('/app', true);
+    equal(calls, [
+      { path: '/projects', method: 'GET', body: undefined },
+      { path: '/projects', method: 'POST', body: { path: '/app', name: 'App', sandbox_network_allowlist: entries } },
+      { path: '/projects', method: 'POST', body: { path: '/app', name: 'App' } },
+      { path: '/projects', method: 'POST', body: { path: '/app', name: 'App', sandbox_network_allowlist: [] } },
+      { path: '/projects', method: 'PATCH', body: { path: '/app', sandbox_network_allowlist: [...entries, ...entries] } },
+      { path: '/projects', method: 'PATCH', body: { path: '/app', sandbox_network_allowlist: [] } },
+      { path: '/projects', method: 'PATCH', body: { path: '/app', archived: true } },
+    ]);
+    globalThis.fetch = async () => ({ ok: false, status: 400,
+      text: async () => JSON.stringify({ detail: 'Invalid sandbox destination' }) });
+    let caught;
+    try { await api.setProjectSandboxNetwork('/app', entries); } catch (error) { caught = error; }
+    equal(caught?.message, 'Invalid sandbox destination');
+  } finally { globalThis.fetch = original; }
+});
+
 await test('sandbox paths API: fresh defaults and atomic scope replacements', async () => {
   const original = globalThis.fetch;
   const calls = [];
