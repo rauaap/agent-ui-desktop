@@ -325,7 +325,7 @@ function append(state, row, changes, extra = null) {
 }
 
 function queuedItem(messageId, message) {
-  return { kind: 'user', messageId, text: message.text ?? '', from: inputSource(message) };
+  return { kind: 'user', messageId, text: message.text ?? '', from: inputSource(message), images: message.images ?? [] };
 }
 
 function findRow(state, predicate) {
@@ -433,7 +433,7 @@ export function reduce(state, event) {
         state.openBubble = null;
         // `from` is null for the user's own words, including older records that
         // predate provenance; see docs/inter-agent-ui.md.
-        append(state, { kind: 'user', text: event.text ?? '', from: inputSource(event) }, changes);
+        append(state, { kind: 'user', text: event.text ?? '', from: inputSource(event), images: event.images ?? [] }, changes);
         break;
       }
       // Accepted, not delivered: it waits outside the transcript, and must not

@@ -47,7 +47,9 @@ export function normalizeCatalog(row) {
     seen.add(id);
     const name = typeof model.name === 'string' && model.name.trim() ? model.name.trim() : id;
     const levels = model.reasoning_levels.filter((level) => typeof level === 'string' && level);
-    models.push({ id, name, reasoning_levels: [...new Set(levels)] });
+    models.push({ id, name, reasoning_levels: [...new Set(levels)],
+      ...(Array.isArray(model.input) ? { input: [...model.input] } : {}),
+    });
   }
   return { models: error ? [] : models, models_error: error };
 }

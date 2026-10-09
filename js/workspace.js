@@ -46,6 +46,7 @@ export class Workspace {
       onLiveEvent: this.handlers.onLiveEvent,
       onConnected: this.handlers.onConnected,
       onOpenSession: this.handlers.onOpenSession,
+      canAttachImages: this.handlers.canAttachImages,
     }, this.directory);
     this.pane.root.classList.add('active');
     this.dom.panes.appendChild(this.pane.root);

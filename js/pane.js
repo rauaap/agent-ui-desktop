@@ -7,6 +7,7 @@
  */
 
 import { httpBase } from './auth.js';
+import { ImageViews, uploadImage } from './images.js';
 import { filedLabel } from './archive.js';
 import { idChip } from './clipboard.js';
 import {
@@ -54,6 +55,8 @@ export class SessionPane {
     this.handlers = handlers;
     this.directory = directory;
     this.draft = new SessionDraft(sessionId);
+    this.attachments = this.draft.images.map((image) => ({ image, status: 'ready' }));
+    this.composerImages = new ImageViews();
     this.scrollPosition = new SessionScroll(sessionId);
     this.pendingScrollPosition = this.scrollPosition.saved;
 
@@ -97,6 +100,7 @@ export class SessionPane {
     this.root.appendChild(this.archiveNotice);
     this.root.appendChild(this.buildComposer());
     this.setComposerValue(this.draft.saved);
+    this.renderAttachments();
     // localStorage writes are synchronous, so normal page exits can save here.
     this.onBeforeUnload = () => { this.saveLocalState(); };
     window.addEventListener('beforeunload', this.onBeforeUnload);
@@ -214,6 +218,21 @@ export class SessionPane {
     this.input = el('textarea');
     this.input.rows = 1;
     this.input.placeholder = 'Send a prompt…';
+    this.input.addEventListener('paste', (event) => {
+      if (this.input.disabled || !this.handlers.canAttachImages?.(this.store.session(this.id))) return;
+      const clipboard = event.clipboardData;
+      if (!clipboard) return;
+      const images = [...(clipboard.items ?? [])]
+        .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
+        .map((item) => item.getAsFile()).filter(Boolean);
+      if (!images.length) {
+        images.push(...[...(clipboard.files ?? [])].filter((file) => file.type.startsWith('image/')));
+      }
+      if (!images.length) return;
+      // Mixed clipboard content still pastes its text normally into the textarea.
+      if (!clipboard.getData('text/plain')) event.preventDefault();
+      this.selectImages(images);
+    });
     this.input.addEventListener('input', () => {
       // Typing after recalling an entry starts a fresh history traversal; the
       // edited value is then preserved as the draft on the next ArrowUp.
@@ -299,8 +318,94 @@ export class SessionPane {
     this.sendButton = el('button', 'btn primary send', 'Send');
     this.sendButton.addEventListener('click', () => this.send());
 
-    composer.append(this.completionMenu, this.input, this.completionButton, this.sendButton);
+    this.attachmentView = el('div', 'composer-images');
+    this.imagePicker = el('input');
+    this.imagePicker.type = 'file';
+    this.imagePicker.accept = 'image/jpeg,image/png,image/gif,image/webp';
+    this.imagePicker.multiple = true;
+    this.imagePicker.hidden = true;
+    this.imagePicker.addEventListener('change', () => {
+      this.selectImages([...this.imagePicker.files]);
+      this.imagePicker.value = '';
+    });
+    this.attachButton = el('button', 'btn attach-image');
+    this.attachButton.type = 'button';
+    this.attachButton.title = 'Attach images';
+    this.attachButton.setAttribute('aria-label', 'Attach images');
+    this.attachButton.innerHTML = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21 11-8.5 8.5a6 6 0 0 1-8.5-8.5l9-9a4 4 0 0 1 5.7 5.7l-9 9a2 2 0 0 1-2.8-2.8L15 6"/></svg>';
+    this.attachButton.addEventListener('click', () => this.imagePicker.click());
+    const field = el('div', 'composer-field');
+    field.append(this.attachmentView, this.input, this.attachButton);
+    composer.append(this.imagePicker, this.completionMenu,
+      field, this.completionButton, this.sendButton);
     return composer;
+  }
+
+  async selectImages(files) {
+    if (!this.handlers.canAttachImages?.(this.store.session(this.id)) || this.input.disabled) return;
+    for (const file of files) {
+      if (this.attachments.length >= 10) {
+        this.handlers.onError('At most 10 images per message');
+        break;
+      }
+      const attachment = { status: 'uploading', url: URL.createObjectURL(file) };
+      this.attachments.push(attachment);
+      this.renderAttachments();
+      // Upload/cache lifetime is independent of the pane. Late success is not a saved draft.
+      uploadImage(file).then((image) => {
+        if (this.destroyed || !this.attachments.includes(attachment)) return;
+        attachment.image = image;
+        attachment.status = 'ready';
+        this.renderAttachments();
+      }).catch((error) => {
+        if (this.destroyed || !this.attachments.includes(attachment)) return;
+        attachment.status = 'failed';
+        attachment.error = error.message;
+        this.renderAttachments();
+      });
+    }
+  }
+
+  savedImages() {
+    return this.attachments.filter((item) => item.status === 'ready').map((item) => item.image);
+  }
+
+  clearAttachments() {
+    for (const item of this.attachments) if (item.url) URL.revokeObjectURL(item.url);
+    this.attachments = [];
+    this.renderAttachments();
+  }
+
+  renderAttachments() {
+    this.composerImages.dispose();
+    this.attachmentView.replaceChildren();
+    for (const item of this.attachments) {
+      const card = el('div', 'composer-image');
+      if (item.url) {
+        const img = el('img');
+        img.src = item.url;
+        img.alt = 'Selected image';
+        card.append(img);
+      } else this.composerImages.append(card, [item.image]);
+      if (item.status !== 'ready') {
+        card.append(el('span', 'upload-status', item.error || 'Uploading…'));
+      }
+      const remove = el('button', 'image-remove', '×');
+      remove.type = 'button';
+      remove.title = 'Remove image';
+      remove.setAttribute('aria-label', 'Remove image');
+      remove.addEventListener('click', () => {
+        if (item.url) URL.revokeObjectURL(item.url);
+        this.attachments = this.attachments.filter((other) => other !== item);
+        this.renderAttachments();
+        if (!this.draft.save(this.input.value, this.savedImages())) {
+          this.handlers.onError('The updated draft could not be saved in this browser');
+        }
+      });
+      card.append(remove);
+      this.attachmentView.append(card);
+    }
+    this.refresh();
   }
 
   /** Replace composer text while keeping its derived styling and size current. */
@@ -420,9 +525,23 @@ export class SessionPane {
   }
 
   send() {
-    const parsed = parseComposerInput(this.input.value);
+    const parsed = parseComposerInput(this.input.value)
+      || (this.attachments.length ? { kind: 'input', text: '' } : null);
     if (!parsed) return;
+    if (this.attachments.length && (parsed.kind === 'bash'
+        || this.attachments.some((item) => item.status !== 'ready'))) {
+      this.handlers.onError('Remove failed images or wait for uploads; images cannot accompany shell commands');
+      return;
+    }
 
+    if (this.attachments.length) {
+      const state = this.store.session(this.id);
+      const images = [...this.savedImages(), ...(state.queue ?? []).flatMap((item) => item.images ?? [])];
+      if (images.reduce((bytes, image) => bytes + image.size, 0) > 20 * 1024 * 1024) {
+        this.handlers.onError('Images exceed the 20 MiB queued-turn limit; remove images or wait for the queue to ship');
+        return;
+      }
+    }
     // Nothing typed after the `!` yet.
     if (parsed.kind === 'bash' && !parsed.command) return;
     const refusal = sendRefusal(this.store.session(this.id), parsed);
@@ -436,7 +555,7 @@ export class SessionPane {
         this.handlers.onError('Not connected — the command was not sent');
         return;
       }
-    } else if (!this.socket.sendInput(parsed.text)) {
+    } else if (!this.socket.sendInput(parsed.text, this.savedImages().map((image) => image.id))) {
       this.handlers.onError('Not connected — the prompt was not sent');
       return;
     }
@@ -447,6 +566,7 @@ export class SessionPane {
     this.messageHistory.add(historyEntry);
     this.pendingHistoryEchoes.push(historyEntry);
     this.input.value = '';
+    this.clearAttachments();
     if (!this.draft.save('')) {
       this.handlers.onError('Sent, but the saved draft could not be cleared in this browser');
     }
@@ -493,7 +613,10 @@ export class SessionPane {
     // agent does not: `!` commands bypass the turn entirely, and a prompt sent
     // mid-turn is queued for the next one.
     this.input.disabled = offline || archived;
-    this.sendButton.disabled = offline || archived;
+    this.sendButton.disabled = offline || archived
+      || this.attachments.some((item) => item.status !== 'ready');
+    this.attachButton.hidden = !this.handlers.canAttachImages?.(state);
+    this.attachButton.disabled = offline || archived || this.attachments.length >= 10;
     this.input.placeholder = archived
       ? 'Archived — unarchive to send prompts or commands'
       : offline
@@ -531,7 +654,7 @@ export class SessionPane {
 
   saveLocalState() {
     const unsaved = [];
-    if (!this.draft.save(this.input.value)) unsaved.push('draft');
+    if (!this.draft.save(this.input.value, this.savedImages())) unsaved.push('draft');
     // Leaving before replay finishes must not replace a saved offset with the
     // temporary position in the partly loaded transcript.
     const position = this.pendingScrollPosition ?? {
@@ -547,6 +670,9 @@ export class SessionPane {
     if (unsaved.length) {
       this.handlers.onError(`The ${unsaved.join(' and ')} could not be saved in this browser`);
     }
+    this.destroyed = true;
+    this.clearAttachments();
+    this.composerImages.dispose();
     window.removeEventListener('beforeunload', this.onBeforeUnload);
     window.removeEventListener('resize', this.onViewportChange);
     this.unsubscribe();

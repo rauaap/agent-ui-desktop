@@ -316,6 +316,21 @@ The same session-exit and `beforeunload` paths save the transcript's scroll offs
 and bottom-following state per session. Returning waits for history replay to
 finish before restoring the offset; a session left following the bottom opens at
 the latest content instead. Navigation during replay cancels the pending restore.
+
+Models whose `/agents` catalog `input` includes `image` expose a paperclip picker.
+Images can also be pasted from the clipboard into the composer; text paste remains native.
+Selection uploads original JPEG/PNG/GIF/WebP bytes immediately over authenticated
+raw HTTP; the existing WebSocket input carries ordered image IDs (including
+image-only prompts). Upload failures remain visible and prevent sending until
+removed. Completed attachments survive navigation/page exit with the text draft;
+unfinished uploads do not. Shell commands cannot carry images.
+
+Transcript and queue images load asynchronously into reserved boxes from an
+explicit browser Cache API cache, seeded by successful uploads. Misses use
+authenticated GET requests and Blob URLs; views revoke those URLs on disposal.
+The cache uses full server download URLs, retains at most 100 entries/100 MiB
+(oldest writes evicted), and never substitutes for the authentication gate.
+Cache/storage failures do not change server image retention or uploaded bytes.
 Scrolling itself does not write to storage. Offsets are in CSS pixels within the
 loaded history, so a changed replay window or text reflow may shift which message
 occupies the saved position; offsets beyond the available history are clamped.
@@ -608,6 +623,7 @@ client's `LineDiffTest`, `MarkdownTest` and `WorktreeTest`:
 ```sh
 node test/run.js          # any JS runtime
 node test/auth-tests.js   # token transport, mocked fetch/WebSocket
+node test/image-tests.js  # original-byte uploads, bounded cache, drafts, queue and send gating
 node test/model-api-tests.js  # /agents catalogs, model and reasoning pickers
 node test/sandbox-network-dialog-tests.js  # network editor DOM smoke test
 node test/shared-assets-tests.js  # shared assets dialogs and server-relative Markdown links

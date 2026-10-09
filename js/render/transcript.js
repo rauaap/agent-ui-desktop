@@ -8,6 +8,7 @@
  */
 
 import { copyText } from '../clipboard.js';
+import { ImageViews } from '../images.js';
 import { bashOutputText, bashStatus, rowText } from '../store.js';
 import {
   actionLabel, actionSummary, prettyJson, sessionToolName, sessionToolParts,
@@ -41,6 +42,9 @@ export class TranscriptView {
     this.directory = directory;
     /** @type {Map<number, HTMLElement>} row key -> element */
     this.nodes = new Map();
+    this.images = new ImageViews(() => {
+      if (this.followBottom) this.scrollToBottom();
+    });
     this.query = '';
 
     this.wrap = el('div', 'transcript-wrap');
@@ -83,6 +87,7 @@ export class TranscriptView {
   }
 
   destroy() {
+    this.images.dispose();
     this.resizeObserver.disconnect();
     this.scrolling.destroy();
     this.unsubscribe();
@@ -133,6 +138,7 @@ export class TranscriptView {
           }
           const replacement = this.build(change.row);
           this.nodes.set(change.row.key, replacement);
+          this.images.dispose(existing);
           existing.replaceWith(replacement);
           touched = true;
           break;
@@ -140,6 +146,7 @@ export class TranscriptView {
         case 'remove': {
           const node = this.nodes.get(change.row.key);
           if (node) {
+            this.images.dispose(node);
             node.remove();
             touched = true;
           }
@@ -157,6 +164,7 @@ export class TranscriptView {
 
   rebuild(position = null) {
     const state = this.store.session(this.sessionId);
+    this.images.dispose(this.list);
     this.nodes.clear();
     this.list.replaceChildren();
     // Build off-document, then attach in one shot: a 200-row replay should cost
@@ -334,6 +342,7 @@ export class TranscriptView {
    */
   renderQueue() {
     const { queue } = this.store.session(this.sessionId);
+    this.images.dispose(this.queueView);
     this.queueView.replaceChildren();
     this.queueView.style.display = queue.length ? '' : 'none';
     if (!queue.length) return;
@@ -352,6 +361,7 @@ export class TranscriptView {
         node.appendChild(head);
       }
       node.appendChild(el('div', 'queued-text', item.text));
+      this.images.append(node, item.images);
       this.queueView.appendChild(node);
     }
   }
@@ -372,6 +382,7 @@ export class TranscriptView {
       case 'error': node = this.buildError(row); break;
       default: node = el('div', 'row');
     }
+    if (row.kind === 'user') this.images.append(node.querySelector('.msg-user') || node, row.images);
     node.dataset.key = String(row.key);
     if (this.query) this.applyQueryTo(node, row);
     return node;

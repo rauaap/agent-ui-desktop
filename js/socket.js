@@ -107,9 +107,9 @@ export class SessionSocket {
   }
 
   /** Send a prompt, starting a turn. */
-  sendInput(text) {
+  sendInput(text, images = []) {
     if (this.store.session(this.id).sandboxSaving) return false;
-    return this.send({ type: 'input', text });
+    return this.send({ type: 'input', text, ...(images.length ? { images } : {}) });
   }
 
   /**

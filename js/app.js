@@ -114,6 +114,8 @@ const workspace = new Workspace(
       sidebar.setActive(id);
     },
     onOpenSession: openSessionById,
+    canAttachImages: (session) => agents.find((agent) => agent.id === session.agent)
+      ?.models.find((model) => model.id === session.model)?.input?.includes('image') === true,
   },
   directory,
 );

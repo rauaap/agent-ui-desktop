@@ -14,7 +14,11 @@ const root = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 const server = http.createServer(async (req, res) => {
   if (req.url === '/') {
     res.setHeader('Content-Type', 'text/html');
-    res.end('<link rel="stylesheet" href="/css/theme.css"><link rel="stylesheet" href="/css/app.css"><main id="panes" style="height:700px;width:900px;position:relative"></main><div id="empty"></div>');
+    // Exercise the production policy, not a permissive synthetic page.
+    const html = await readFile(path.join(root, 'index.html'), 'utf8');
+    const csp = html.match(/<meta http-equiv="Content-Security-Policy"[^>]*>/i)?.[0];
+    assert.ok(csp, 'production CSP exists');
+    res.end(`${csp}<link rel="stylesheet" href="/css/theme.css"><link rel="stylesheet" href="/css/app.css"><main id="panes" style="height:700px;width:900px;position:relative"></main><div id="empty"></div>`);
     return;
   }
   try {
@@ -255,7 +259,106 @@ try {
   });
   await settle();
   assert.equal(await page.evaluate(() => view.list.scrollTop), duringReplay.top, 'replay completion does not override user navigation');
-  console.log('Scroll browser regressions passed');
+  // Real DOM/cache attachment regression: cached originals, reserved async misses,
+  // draft restoration, and image loading must not disturb a reader's offset.
+  await page.evaluate(async () => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 80; canvas.height = 40;
+    window.imageBytes = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+    window.testImage = { id: 'browser-image', mime_type: 'image/png', size: imageBytes.size, width: 80, height: 40 };
+    const { seedImage } = await import('/js/images.js');
+    await seedImage(testImage, imageBytes);
+    window.imageGets = 0;
+    window.fetch = (url, options) => {
+      imageGets++;
+      if (options.headers.get('Authorization') !== 'Bearer test-only') throw Error('Missing image auth');
+      return new Promise(resolve => { window.finishImage = () => resolve(new Response(imageBytes)); });
+    };
+    window.readerTop = view.list.scrollTop;
+    store.apply('7', { type: 'input', message_id: 50001, delivery: 'queued', text: '', images: [testImage] });
+  });
+  await settle();
+  assert.equal(await page.evaluate(() => imageGets), 0, 'cached image uses no GET');
+  assert.equal(await page.$eval('.queue .image-box img', img => img.complete && img.naturalWidth === 80), true);
+  await page.evaluate(() => {
+    store.apply('7', { type: 'inputs_shipped', messages: [{ message_id: 50001, text: '', images: [testImage] }] });
+    store.apply('7', { type: 'input', text: 'slow image', images: [{ ...testImage, id: 'slow-browser-image' }] });
+    store.apply('7', { type: 'output', text: 'Events continue before the image loads' });
+  });
+  await settle();
+  assert.equal(await page.evaluate(() => imageGets), 1, 'cache miss uses authenticated GET');
+  assert.equal(await page.evaluate(() => store.session('7').rows.at(-1).text), 'Events continue before the image loads');
+  assert.deepEqual(await page.$eval('.row-user .msg-user .image-box', box => ({
+    width: box.getBoundingClientRect().width,
+    height: box.getBoundingClientRect().height,
+    insideBubble: box.closest('.msg-user') !== null,
+    atBottom: box.parentElement === box.closest('.msg-user').lastElementChild,
+  })), { width: 88, height: 66, insideBubble: true, atBottom: true }, 'small thumbnails live inside the message bubble');
+  assert.deepEqual(await page.$eval('.row-user .msg-user .image-box', box => ({
+    background: getComputedStyle(box).backgroundColor,
+    border: getComputedStyle(box).borderTopWidth,
+    radius: getComputedStyle(box.querySelector('img')).borderRadius,
+  })), { background: 'rgba(0, 0, 0, 0)', border: '0px', radius: '10px' }, 'message previews have no gray container and use rounded images');
+  const beforeImage = await page.evaluate(() => view.list.scrollTop);
+  await page.evaluate(() => finishImage());
+  await settle();
+  assert.equal(await page.evaluate(() => view.list.scrollTop), beforeImage, 'async image completion preserves detached reading position');
+  await page.evaluate(() => {
+    pane.attachments = [{ status: 'ready', image: testImage }, { status: 'uploading' }, { status: 'failed' }];
+    pane.input.value = 'image draft';
+    pane.saveLocalState();
+    workspace.openSession('8');
+    workspace.openSession('7');
+    window.pane = workspace.pane;
+    window.view = pane.transcript;
+  });
+  await settle();
+  assert.deepEqual(await page.evaluate(() => ({ text: pane.input.value, images: pane.savedImages().map(image => image.id) })),
+    { text: 'image draft', images: ['browser-image'] }, 'only completed attachments restore');
+  assert.equal(await page.$eval('.composer-images img', img => img.complete && img.naturalWidth === 80), true);
+  await page.evaluate(() => {
+    pane.handlers.canAttachImages = () => true;
+    store.setConnected('7', true);
+    pane.refresh();
+  });
+  assert.deepEqual(await page.$eval('.composer-field', field => {
+    const button = field.querySelector('.attach-image');
+    const frame = field.getBoundingClientRect();
+    const rect = button.getBoundingClientRect();
+    const remove = field.querySelector('.image-remove');
+    return {
+      square: rect.width === rect.height && rect.width === 30,
+      insideRight: rect.right < frame.right && frame.right - rect.right < 10,
+      svg: !!button.querySelector('svg'),
+      readyLabel: !!field.querySelector('.upload-status'),
+      roundRemove: getComputedStyle(remove).borderRadius === '50%',
+      removeLabel: remove.getAttribute('aria-label'),
+    };
+  }), { square: true, insideRight: true, svg: true, readyLabel: false, roundRemove: true, removeLabel: 'Remove image' });
+  await page.click('.image-remove');
+  assert.equal(await page.evaluate(() => pane.attachments.length), 0, 'corner remove button removes attachment');
+  const pasted = await page.evaluate(() => {
+    window.pasteUploads = 0;
+    window.fetch = async (url, options) => {
+      if (!url.endsWith('/images') || options.method !== 'POST') throw Error('Unexpected clipboard request');
+      if (!(options.body instanceof File) || options.body.size !== imageBytes.size) throw Error('Clipboard bytes changed');
+      pasteUploads++;
+      return new Response(JSON.stringify({ ...testImage, id: 'clipboard-image' }), { status: 201 });
+    };
+    const clipboard = new DataTransfer();
+    clipboard.items.add(new File([imageBytes], 'clipboard.png', { type: 'image/png' }));
+    const event = new ClipboardEvent('paste', { clipboardData: clipboard, bubbles: true, cancelable: true });
+    pane.input.dispatchEvent(event);
+    return event.defaultPrevented;
+  });
+  assert.equal(pasted, true, 'image-only paste suppresses native insertion');
+  await settle();
+  assert.deepEqual(await page.evaluate(() => ({ uploads: pasteUploads, ids: pane.savedImages().map(image => image.id) })),
+    { uploads: 1, ids: ['clipboard-image'] }, 'pasted image uploads through normal attachment flow');
+  assert.equal(await page.$eval('.composer-images img', img => img.complete && img.naturalWidth === 80), true);
+  assert.equal(await page.$eval('.composer-images img', img => getComputedStyle(img).borderRadius), '10px');
+  assert.equal(await page.$eval('.attach-image', button => getComputedStyle(button).borderRadius), '10px');
+  console.log('Scroll and image browser regressions passed');
 } finally {
   if (browser) await browser.close();
   await new Promise(resolve => server.close(resolve));
