@@ -66,7 +66,7 @@ export class Sidebar {
     this.handlers = handlers;
     this.projects = [];
     this.sessions = [];
-    /** @type {Map<string, object>} worktrees by id, for the badge's tooltip. */
+    /** @type {Map<string, object>} worktrees by id, for badges and tooltips. */
     this.worktrees = new Map();
     /** @type {object[]} agents from `GET /agents`, for the tooltip's agent and model names. */
     this.agents = [];
@@ -325,6 +325,9 @@ export class Sidebar {
       const mark = el('span', `wt${former ? ' former' : ''}`, former ? 'FWT' : 'WT');
       mark.title = where;
       item.appendChild(mark);
+    }
+    if (this.worktrees.get(String(session.worktree_id))?.exists === false) {
+      item.appendChild(el('span', 'missing', 'MISSING'));
     }
     if (inArchive) {
       // Unarchiving from the row rather than only from session settings: those

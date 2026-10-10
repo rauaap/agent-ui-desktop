@@ -199,9 +199,10 @@ body.sidebar-resizing * { cursor: col-resize !important; user-select: none !impo
 .session:hover .gear { opacity: 1; }
 .gear:hover { color: var(--ink); background: var(--panel-hover); }
 
-/* "the directory this row describes is not on disk" — a project's, or a
- * worktree's in the project settings list. */
+/* "the directory this row describes is not on disk" — a project's, a
+ * session's worktree, or a worktree's in the project settings list. */
 .project .missing,
+.session .missing,
 .wt-path .missing {
   flex: none;
   font-family: var(--font);
