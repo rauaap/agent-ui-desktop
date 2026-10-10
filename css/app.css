@@ -613,6 +613,10 @@ body.sidebar-resizing * { cursor: col-resize !important; user-select: none !impo
 /* A letter among glyphs, so it needs the weight to carry the same visual size. */
 .icon-btn.usage-btn { font-weight: 700; }
 
+.notification-toggle { display: inline-flex; align-items: center; gap: 8px; }
+.notification-toggle svg { flex: none; }
+.notification-toggle[aria-pressed="true"] { color: var(--accent); }
+
 .icon-btn:hover { background: var(--panel-hover); color: var(--ink); }
 .icon-btn.danger:hover { background: var(--danger-soft); color: var(--danger); }
 

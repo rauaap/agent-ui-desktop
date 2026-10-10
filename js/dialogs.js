@@ -286,7 +286,7 @@ const SAMPLE_BRANCH = 'feature/fix-login';
  * Resolves `{template, agent}`, or null. `agent` is undefined when the server
  * supplied no agent list, so opening settings offline cannot erase a choice.
  */
-export function appSettingsDialog(template, sampleProject, agents = [], agent = null) {
+export function appSettingsDialog(template, sampleProject, agents = [], agent = null, notifications = null) {
   let input;
   let agentSelect;
   let action;
@@ -309,6 +309,11 @@ export function appSettingsDialog(template, sampleProject, agents = [], agent = 
       assets.addEventListener('click', () => { action = 'shared-assets'; submit(); });
       body.appendChild(assets);
       body.appendChild(el('div', 'dlg-label', 'Browser preferences'));
+      if (notifications) {
+        body.appendChild(notifications);
+        body.appendChild(el('div', 'dlg-note',
+          'Notifications for the selected session while the app is hidden. This preference applies only to this browser and changes immediately.'));
+      }
       if (agents.length) {
         const wrap = el('div', 'field');
         wrap.appendChild(el('label', null, 'Default agent'));

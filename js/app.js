@@ -958,6 +958,7 @@ async function openAppSettings() {
     sampleProject()?.path,
     agents,
     agentPreference(),
+    bell,
   );
   if (!result) return;
   setWorktreeTemplate(result.template);
@@ -1182,24 +1183,48 @@ window.addEventListener('resize', () => {
   }
 });
 
-// A notification bell in the sidebar header: one switch for every session,
-// for the selected session's live connection.
+// Browser-local notifications live in settings, not in the sidebar toolbar.
 const bell = document.createElement('button');
-bell.className = 'icon-btn';
-bell.textContent = '🔔';
+bell.className = 'btn notification-toggle';
+bell.type = 'button';
+const bellIcon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+bellIcon.setAttribute('viewBox', '0 0 24 24');
+bellIcon.setAttribute('width', '18');
+bellIcon.setAttribute('height', '18');
+bellIcon.setAttribute('fill', 'none');
+bellIcon.setAttribute('stroke', 'currentColor');
+bellIcon.setAttribute('stroke-width', '1.75');
+bellIcon.setAttribute('stroke-linecap', 'round');
+bellIcon.setAttribute('stroke-linejoin', 'round');
+bellIcon.setAttribute('aria-hidden', 'true');
+bellIcon.setAttribute('focusable', 'false');
+const bellPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+bellPath.setAttribute('d', 'M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4');
+bellIcon.appendChild(bellPath);
+bell.appendChild(bellIcon);
+const bellLabel = document.createElement('span');
+bell.appendChild(bellLabel);
 const paintBell = () => {
-  bell.style.opacity = notifier.enabled ? '1' : '0.4';
+  bell.setAttribute('aria-pressed', String(notifier.enabled));
+  bellLabel.textContent = `Desktop notifications: ${notifier.enabled ? 'On' : 'Off'}`;
   bell.title = notifier.enabled
     ? 'Desktop notifications on — click to mute'
     : 'Desktop notifications off — click to enable';
 };
 bell.addEventListener('click', async () => {
-  const wanted = !notifier.enabled;
-  await notifier.setEnabled(wanted);
-  if (wanted && !notifier.enabled) {
-    toast('The browser has blocked notifications for this site', true);
+  bell.disabled = true;
+  try {
+    const wanted = !notifier.enabled;
+    await notifier.setEnabled(wanted);
+    if (wanted && !notifier.enabled) {
+      toast('The browser has blocked notifications for this site', true);
+    }
+  } catch (error) {
+    toast(error.message || 'Could not enable desktop notifications', true);
+  } finally {
+    paintBell();
+    bell.disabled = false;
   }
-  paintBell();
 });
 paintBell();
 
@@ -1209,10 +1234,9 @@ settingsButton.textContent = '⚙';
 settingsButton.title = 'Settings';
 settingsButton.addEventListener('click', openAppSettings);
 
-// Both go in front of +, which stays last: it is the one that adds something.
+// Settings goes in front of +, which stays last: it adds something.
 const sidebarHead = document.querySelector('.sidebar-head');
 const newProjectButton = document.getElementById('new-project-btn');
-sidebarHead.insertBefore(bell, newProjectButton);
 sidebarHead.insertBefore(settingsButton, newProjectButton);
 
 /* ------------------------------------------------------------------ */

@@ -71,6 +71,18 @@ try {
   assert.equal(await cancelled, null);
   assert.equal(saved, false);
 
+  const notifications = document.createElement('button');
+  notifications.textContent = 'Desktop notifications: Off';
+  let notificationClicks = 0;
+  notifications.addEventListener('click', () => { notificationClicks++; });
+  const notificationSettings = appSettingsDialog(null, '/project', [], null, notifications);
+  assert.ok(descendants(dialog()).includes(notifications));
+  await button('Desktop notifications: Off').emit('click');
+  assert.equal(notificationClicks, 1);
+  assert.equal(document.body.children.includes(dialog()), true);
+  await button('Cancel').emit('click');
+  assert.equal(await notificationSettings, null);
+
   const settings = appSettingsDialog(null, '/project');
   await button('Server shared assets…').emit('click');
   assert.equal((await settings).action, 'shared-assets');
