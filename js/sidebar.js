@@ -71,6 +71,7 @@ export class Sidebar {
     /** @type {object[]} agents from `GET /agents`, for the tooltip's agent and model names. */
     this.agents = [];
     this.activeId = null;
+    this.query = '';
     this.selectedIds = new Set();
     this.selectionAnchor = null;
     this.selectionScope = null;
@@ -97,6 +98,15 @@ export class Sidebar {
     this.worktrees = new Map(worktrees.map((w) => [String(w.id), w]));
     this.agents = agents;
     this.render();
+  }
+
+  /** Search is transient; clearing it restores the saved expansion state. */
+  setQuery(value) {
+    const query = value.trim().toLowerCase();
+    if (query === this.query) return;
+    this.query = query;
+    this.render();
+    this.scrollToTop();
   }
 
   /** Apply a poll without rebuilding the tree when only status changed. */
@@ -162,10 +172,12 @@ export class Sidebar {
 
   /** Each project with its sessions split by the server's `archived_at`. */
   groups() {
-    return this.projects.map((project) => ({
-      project,
-      ...partition(this.sessions.filter((s) => belongsTo(s, project))),
-    }));
+    return this.projects.map((project) => {
+      const projectMatches = (project.name || project.path).toLowerCase().includes(this.query);
+      const sessions = this.sessions.filter((session) => belongsTo(session, project)
+        && (projectMatches || (session.name || String(session.id)).toLowerCase().includes(this.query)));
+      return { project, projectMatches, ...partition(sessions) };
+    }).filter((group) => group.projectMatches || group.live.length || group.archived.length);
   }
 
   render() {
@@ -187,7 +199,9 @@ export class Sidebar {
     // strand up here. A live project stays put however many of its sessions
     // have been filed away.
     for (const group of groups) {
-      if (!isArchived(group.project)) this.renderProject(group, false);
+      if (!isArchived(group.project) && (group.projectMatches || group.live.length)) {
+        this.renderProject(group, false);
+      }
     }
 
     // A project belongs in the archive if it is archived itself, or if any of
@@ -195,6 +209,9 @@ export class Sidebar {
     // project it was created in either way.
     const filed = groups.filter((g) => isArchived(g.project) || g.archived.length);
     if (filed.length) this.renderArchive(filed);
+    if (!this.root.children.length) {
+      this.root.appendChild(el('div', 'tree-empty', 'No matching projects or sessions.'));
+    }
   }
 
   /** One project row plus, when open, its sessions. */
@@ -202,7 +219,7 @@ export class Sidebar {
     const { project } = group;
     const sessions = inArchive ? byArchivedAt(group.archived) : group.live;
     const key = inArchive ? archiveKey(project) : project.path;
-    const open = this.expanded.has(key);
+    const open = Boolean(this.query) || this.expanded.has(key);
     // Inside the archive, a project that is *itself* archived is a different
     // thing from a live one that merely holds archived sessions: only the
     // former can be brought back, and only the former is dimmed.
@@ -266,7 +283,7 @@ export class Sidebar {
     // Keep the frequent creation action first, before the project's existing
     // sessions. There is no equivalent in the archive: the server refuses one
     // in an archived project, and for a live project it would land above.
-    if (!inArchive) {
+    if (!inArchive && !this.query) {
       const add = el('button', 'add-row', '+  New session');
       add.addEventListener('click', () => this.handlers.onNewSession(project));
       list.appendChild(add);
@@ -462,7 +479,7 @@ export class Sidebar {
   }
 
   renderArchive(groups) {
-    const open = this.expanded.has(SECTION_KEY);
+    const open = Boolean(this.query) || this.expanded.has(SECTION_KEY);
     const total = groups.reduce((sum, g) => sum + g.archived.length, 0);
 
     const head = el('button', `tree-section${open ? ' open' : ''}`);
@@ -481,6 +498,8 @@ export class Sidebar {
   }
 
   toggle(key) {
+    // Search results stay visible without changing the remembered tree layout.
+    if (this.query) return;
     if (this.expanded.has(key)) this.expanded.delete(key);
     else this.expanded.add(key);
     saveExpanded([...this.expanded]);

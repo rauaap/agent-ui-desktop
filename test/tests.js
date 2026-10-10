@@ -27,6 +27,7 @@ import { toHtml } from '../js/render/markdown.js';
 import { composerEntries, MessageHistory } from '../js/message-history.js';
 import { SessionDraft } from '../js/session-draft.js';
 import { SessionScroll } from '../js/session-scroll.js';
+import { Sidebar } from '../js/sidebar.js';
 import { Store, parseComposerInput, reduce, rowText } from '../js/store.js';
 import {
   actionSummary,
@@ -50,6 +51,63 @@ import {
 import { sandboxPathEntries, isExactOverride } from '../js/sandbox-paths.js';
 
 const results = [];
+
+function searchSidebar() {
+  const sidebar = Object.create(Sidebar.prototype);
+  sidebar.projects = [
+    { id: '1', name: 'Desktop', path: '/desktop' },
+    { id: '2', name: 'Server', path: '/server' },
+    { id: '3', path: '/empty' },
+  ];
+  sidebar.sessions = [
+    { id: '10', project_id: '1', name: 'Search UI', working_dir: '/worktree' },
+    { id: '11', project_id: '1', name: 'Layout' },
+    { id: '12', project_id: '2', name: 'Search backend', archived_at: '2026-01-01' },
+  ];
+  sidebar.query = '';
+  return sidebar;
+}
+
+test('sidebar search: session matches retain parents and respect worktree ownership', () => {
+  const sidebar = searchSidebar();
+  sidebar.query = 'search';
+  const groups = sidebar.groups();
+  assertEqual(groups.length, 2);
+  assertEqual(groups[0].live.length, 1);
+  assertEqual(groups[0].live[0].id, '10');
+  assertEqual(groups[1].live.length, 0);
+  assertEqual(groups[1].archived[0].id, '12');
+});
+
+test('sidebar search: project matches include all sessions, paths back up unnamed projects', () => {
+  const sidebar = searchSidebar();
+  sidebar.query = 'desktop';
+  assertEqual(sidebar.groups().length, 1);
+  assertEqual(sidebar.groups()[0].live.length, 2);
+  sidebar.query = 'empty';
+  assertEqual(sidebar.groups()[0].project.id, '3');
+  sidebar.query = 'not found';
+  assertEqual(sidebar.groups().length, 0);
+  sidebar.query = '';
+  assertEqual(sidebar.groups().length, 3);
+});
+
+test('sidebar search: input normalizes immediately without altering expansion state', () => {
+  const sidebar = searchSidebar();
+  sidebar.expanded = new Set(['/server']);
+  let renders = 0;
+  let scrolls = 0;
+  sidebar.render = () => { renders++; };
+  sidebar.scrollToTop = () => { scrolls++; };
+  sidebar.setQuery('  SEARCH  ');
+  assertEqual(sidebar.query, 'search');
+  sidebar.setQuery('search');
+  assertEqual(renders, 1);
+  sidebar.setQuery('');
+  assertEqual(renders, 2);
+  assertEqual(scrolls, 2);
+  assertEqual([...sidebar.expanded].join(','), '/server');
+});
 
 function test(name, fn) {
   try {

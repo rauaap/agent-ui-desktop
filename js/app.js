@@ -138,6 +138,14 @@ const sidebar = new Sidebar(document.getElementById('tree'), store, {
   },
 });
 
+const sidebarSearch = document.getElementById('sidebar-search');
+sidebarSearch.addEventListener('input', () => sidebar.setQuery(sidebarSearch.value));
+sidebarSearch.addEventListener('keydown', (event) => {
+  if (event.key !== 'Escape') return;
+  sidebarSearch.value = '';
+  sidebar.setQuery('');
+});
+
 notifier.onActivate = (id) => {
   if (workspace.isOpen(id)) workspace.activate(id);
 };

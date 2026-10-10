@@ -112,23 +112,24 @@ body.sidebar-resizing * { cursor: col-resize !important; user-select: none !impo
   align-items: center;
   flex: none;
   gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   padding: 14px 14px 10px;
 }
 
-/* The caption yields first when the sidebar narrows — the buttons beside it are
- * the only way to add a project or reload, so they never shrink or wrap away. */
-.sidebar-title {
-  flex: 1 1 auto;
+/* Search gets a full row even at the sidebar's minimum width. */
+.sidebar-search {
+  flex: 1 1 100%;
+  width: 100%;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
   font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--faint);
 }
+.sidebar-search::placeholder { color: var(--faint); }
+.sidebar-search:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 #tree {
   flex: 1;
