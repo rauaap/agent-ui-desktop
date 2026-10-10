@@ -65,6 +65,7 @@ function searchSidebar() {
     { id: '12', project_id: '2', name: 'Search backend', archived_at: '2026-01-01' },
   ];
   sidebar.query = '';
+  sidebar.searchCollapsed = new Set();
   return sidebar;
 }
 
@@ -90,6 +91,29 @@ test('sidebar catalog: unchanged metadata updates dots without rebuilding the tr
   sidebar.setData(sidebar.projects, sessions.map((session) => ({ ...session, name: 'Renamed' })),
     [{ id: 'w1', branch: 'feature' }], [{ id: 'pi' }]);
   assertEqual(renders, 4);
+});
+
+test('sidebar search: collapse is temporary and a changed query expands results again', () => {
+  const sidebar = searchSidebar();
+  sidebar.expanded = new Set(['/server']);
+  sidebar.render = () => {};
+  sidebar.scrollToTop = () => {};
+  sidebar.setQuery('search');
+  sidebar.toggle('/desktop');
+  sidebar.toggle('archived');
+  assertEqual(sidebar.searchCollapsed.has('/desktop'), true);
+  assertEqual(sidebar.searchCollapsed.has('archived'), true);
+  sidebar.setSessions(sidebar.sessions.map((session) => ({ ...session, name: 'Renamed' })));
+  assertEqual(sidebar.searchCollapsed.has('/desktop'), true, 'poll rebuild preserves collapse');
+  sidebar.toggle('/desktop');
+  assertEqual(sidebar.searchCollapsed.has('/desktop'), false);
+  sidebar.toggle('/desktop');
+  sidebar.setQuery('search ui');
+  assertEqual(sidebar.searchCollapsed.size, 0);
+  sidebar.toggle('/desktop');
+  sidebar.setQuery('');
+  assertEqual(sidebar.searchCollapsed.size, 0);
+  assertEqual([...sidebar.expanded].join(','), '/server');
 });
 
 test('sidebar search: session matches retain parents and respect worktree ownership', () => {

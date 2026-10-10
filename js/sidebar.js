@@ -72,6 +72,7 @@ export class Sidebar {
     this.agents = [];
     this.activeId = null;
     this.query = '';
+    this.searchCollapsed = new Set();
     this.selectedIds = new Set();
     this.selectionAnchor = null;
     this.selectionScope = null;
@@ -111,6 +112,7 @@ export class Sidebar {
     const query = value.trim().toLowerCase();
     if (query === this.query) return;
     this.query = query;
+    this.searchCollapsed.clear();
     this.render();
     this.scrollToTop();
   }
@@ -225,7 +227,7 @@ export class Sidebar {
     const { project } = group;
     const sessions = inArchive ? byArchivedAt(group.archived) : group.live;
     const key = inArchive ? archiveKey(project) : project.path;
-    const open = Boolean(this.query) || this.expanded.has(key);
+    const open = this.query ? !this.searchCollapsed.has(key) : this.expanded.has(key);
     // Inside the archive, a project that is *itself* archived is a different
     // thing from a live one that merely holds archived sessions: only the
     // former can be brought back, and only the former is dimmed.
@@ -289,7 +291,7 @@ export class Sidebar {
     // Keep the frequent creation action first, before the project's existing
     // sessions. There is no equivalent in the archive: the server refuses one
     // in an archived project, and for a live project it would land above.
-    if (!inArchive && !this.query) {
+    if (!inArchive) {
       const add = el('button', 'add-row', '+  New session');
       add.addEventListener('click', () => this.handlers.onNewSession(project));
       list.appendChild(add);
@@ -485,7 +487,7 @@ export class Sidebar {
   }
 
   renderArchive(groups) {
-    const open = Boolean(this.query) || this.expanded.has(SECTION_KEY);
+    const open = this.query ? !this.searchCollapsed.has(SECTION_KEY) : this.expanded.has(SECTION_KEY);
     const total = groups.reduce((sum, g) => sum + g.archived.length, 0);
 
     const head = el('button', `tree-section${open ? ' open' : ''}`);
@@ -504,8 +506,13 @@ export class Sidebar {
   }
 
   toggle(key) {
-    // Search results stay visible without changing the remembered tree layout.
-    if (this.query) return;
+    // Search-only collapses last until the query changes, not in saved layout.
+    if (this.query) {
+      if (this.searchCollapsed.has(key)) this.searchCollapsed.delete(key);
+      else this.searchCollapsed.add(key);
+      this.render();
+      return;
+    }
     if (this.expanded.has(key)) this.expanded.delete(key);
     else this.expanded.add(key);
     saveExpanded([...this.expanded]);
@@ -514,9 +521,14 @@ export class Sidebar {
 
   /** Open the archive at one project — where its "N archived" badge points. */
   reveal(project) {
-    this.expanded.add(SECTION_KEY);
-    this.expanded.add(archiveKey(project));
-    saveExpanded([...this.expanded]);
+    if (this.query) {
+      this.searchCollapsed.delete(SECTION_KEY);
+      this.searchCollapsed.delete(archiveKey(project));
+    } else {
+      this.expanded.add(SECTION_KEY);
+      this.expanded.add(archiveKey(project));
+      saveExpanded([...this.expanded]);
+    }
     this.render();
     const row = this.root.querySelector(`[data-key="${cssEscape(archiveKey(project))}"]`);
     row?.scrollIntoView?.({ block: 'nearest' });
@@ -530,7 +542,10 @@ export class Sidebar {
     const project = this.projects.find((row) => belongsTo(session, row));
     if (!project) return;
     const keys = isArchived(session) ? [SECTION_KEY, archiveKey(project)] : [project.path];
-    if (keys.some((key) => !this.expanded.has(key))) {
+    if (this.query && keys.some((key) => this.searchCollapsed.has(key))) {
+      for (const key of keys) this.searchCollapsed.delete(key);
+      this.render();
+    } else if (!this.query && keys.some((key) => !this.expanded.has(key))) {
       for (const key of keys) this.expanded.add(key);
       saveExpanded([...this.expanded]);
       this.render();
