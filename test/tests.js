@@ -68,6 +68,30 @@ function searchSidebar() {
   return sidebar;
 }
 
+test('sidebar catalog: unchanged metadata updates dots without rebuilding the tree', () => {
+  const sidebar = searchSidebar();
+  sidebar.worktrees = new Map();
+  sidebar.agents = [];
+  let renders = 0;
+  let statusUpdates = 0;
+  sidebar.render = () => { renders++; };
+  sidebar.refreshStatuses = () => { statusUpdates++; };
+  const projects = sidebar.projects.map((project) => ({ ...project }));
+  const sessions = sidebar.sessions.map((session) => ({ ...session, status: 'running' }));
+  sidebar.setData(projects, sessions);
+  assertEqual(renders, 0);
+  assertEqual(statusUpdates, 1);
+  sidebar.setData([...projects, { id: '4', name: 'New', path: '/new' }], sessions);
+  assertEqual(renders, 1);
+  sidebar.setData(sidebar.projects, sessions, [{ id: 'w1', branch: 'feature' }]);
+  assertEqual(renders, 2);
+  sidebar.setData(sidebar.projects, sessions, [{ id: 'w1', branch: 'feature' }], [{ id: 'pi' }]);
+  assertEqual(renders, 3);
+  sidebar.setData(sidebar.projects, sessions.map((session) => ({ ...session, name: 'Renamed' })),
+    [{ id: 'w1', branch: 'feature' }], [{ id: 'pi' }]);
+  assertEqual(renders, 4);
+});
+
 test('sidebar search: session matches retain parents and respect worktree ownership', () => {
   const sidebar = searchSidebar();
   sidebar.query = 'search';

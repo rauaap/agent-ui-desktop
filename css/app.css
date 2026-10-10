@@ -112,15 +112,13 @@ body.sidebar-resizing * { cursor: col-resize !important; user-select: none !impo
   align-items: center;
   flex: none;
   gap: 8px;
-  flex-wrap: wrap;
-  justify-content: flex-end;
   padding: 14px 14px 10px;
 }
 
-/* Search gets a full row even at the sidebar's minimum width. */
+/* Search yields space to the fixed-width toolbar buttons without wrapping. */
 .sidebar-search {
-  flex: 1 1 100%;
-  width: 100%;
+  flex: 1 1 0;
+  width: 0;
   min-width: 0;
   padding: 6px 8px;
   border: 1px solid var(--line);

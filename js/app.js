@@ -221,7 +221,7 @@ function connectionSnapshot() {
   return { id, epoch: store.session(id).connectionEpoch };
 }
 
-function acceptSessions(sessions, fullRefresh, since, requestId, connection) {
+function acceptSessions(sessions, since, requestId, connection) {
   if (requestId < catalogAccepted) return false;
   catalogAccepted = requestId;
   sessions = sessions.map((row) => settingsSync.reconcile(row, since));
@@ -248,8 +248,7 @@ function acceptSessions(sessions, fullRefresh, since, requestId, connection) {
     });
   }
 
-  if (fullRefresh) sidebar.setData(projects, sessions, worktrees, agents);
-  else sidebar.setSessions(sessions);
+  sidebar.setData(projects, sessions, worktrees, agents);
   sidebar.setActive(workspace.activeId);
   workspace.pruneMissing(new Set(sessionsById.keys()));
   return true;
@@ -279,7 +278,7 @@ async function patchSettings(request) {
   return row;
 }
 
-async function refresh() {
+async function refresh({ silent = false } = {}) {
   if (authBlocked()) return;
   const connection = connectionSnapshot();
   const since = settingsSync.checkpoint();
@@ -288,29 +287,27 @@ async function refresh() {
     // Worktrees come along unfiltered: they are wanted in three places — the
     // tree's tooltips, the new-session picker and project settings — and one
     // list is cheaper than a filtered fetch each time a dialog opens.
-    // The agent list changes only when the server is upgraded or restarted, so
-    // it rides along with the refresh button rather than being fetched once at
-    // startup — and it fails on its own, keeping whatever it last knew: an
-    // agent picker is not worth failing the tree over.
+    // Include the server's cached agent catalog so a restart is reflected too.
+    // It fails independently, keeping the last usable picker choices.
     const [nextProjects, sessions, nextWorktrees, nextAgents] = await Promise.all([
       api.listProjects(),
       api.listSessions(),
       api.listWorktrees(),
       api.listAgents().catch(() => agents),
     ]);
-    // A faster session-only poll must not discard this refresh's project data.
+    // Overlapping action/focus refreshes must not roll the catalog backwards.
     if (requestId >= projectsAccepted) {
       projectsAccepted = requestId;
       projects = nextProjects;
       worktrees = nextWorktrees;
       agents = nextAgents;
     }
-    if (!acceptSessions(sessions, true, since, requestId, connection)) {
+    if (!acceptSessions(sessions, since, requestId, connection)) {
       sidebar.setData(projects, [...sessionsById.values()], worktrees, agents);
     }
     return { projects, sessions, worktrees };
   } catch (error) {
-    fail(error);
+    if (!silent) fail(error);
     return { projects: [], sessions: [], worktrees: [] };
   }
 }
@@ -318,19 +315,14 @@ async function refresh() {
 const POLL_INTERVAL_MS = 3000;
 let pollInFlight = false;
 
-/** Refresh the session catalog without repeating the heavier project metadata loads. */
-async function pollSessions() {
+/** Keep the full catalog current, including changes made by other clients. */
+async function pollCatalog() {
   if (authBlocked()) return;
   if (pollInFlight || document.visibilityState === 'hidden') return;
   pollInFlight = true;
   try {
-    const connection = connectionSnapshot();
-    const since = settingsSync.checkpoint();
-    const requestId = ++catalogRequest;
-    acceptSessions(await api.listSessions(), false, since, requestId, connection);
-  } catch {
-    // Keep the last useful catalog through a transient polling failure. Manual
-    // refreshes still surface errors when the user explicitly asks for one.
+    // Keep the last useful catalog through transient background failures.
+    await refresh({ silent: true });
   } finally {
     pollInFlight = false;
   }
@@ -941,7 +933,6 @@ async function deleteSessions(sessions) {
 /* ------------------------------------------------------------------ */
 
 document.getElementById('new-project-btn').addEventListener('click', createProject);
-document.getElementById('refresh-btn').addEventListener('click', () => refresh());
 
 // The panel owns its own polling for as long as it is open — a read hits both
 // providers upstream and takes about a second, so it is not folded into the
@@ -1246,5 +1237,5 @@ sidebarHead.insertBefore(settingsButton, newProjectButton);
 (async () => {
   if (authBlocked()) { showTokenPrompt(); return; }
   await refresh();
-  setInterval(pollSessions, POLL_INTERVAL_MS);
+  setInterval(pollCatalog, POLL_INTERVAL_MS);
 })();

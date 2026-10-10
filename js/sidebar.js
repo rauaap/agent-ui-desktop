@@ -93,11 +93,17 @@ export class Sidebar {
   }
 
   setData(projects, sessions, worktrees = [], agents = []) {
+    const metadataChanged = JSON.stringify([this.projects, [...this.worktrees.values()], this.agents])
+      !== JSON.stringify([projects, worktrees, agents]);
     this.projects = projects;
-    this.sessions = sessions;
     this.worktrees = new Map(worktrees.map((w) => [String(w.id), w]));
     this.agents = agents;
-    this.render();
+    if (metadataChanged) {
+      this.sessions = sessions;
+      this.render();
+    } else {
+      this.setSessions(sessions);
+    }
   }
 
   /** Search is transient; clearing it restores the saved expansion state. */

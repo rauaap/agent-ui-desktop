@@ -110,9 +110,10 @@ CSP intentionally allows only same-origin connections; the supported path is
   `%b` the branch verbatim. The default `%P/%N-%B` puts `/projects/app` on
   branch `fix-login` at `/projects/app-fix-login`. The seeded path follows the
   branch field until you edit it, and a Reset button leashes it again.
-- **Live session list** — the sidebar polls lightweight session metadata every
-  three seconds, so every status dot stays current. Selecting a session opens
-  the one full transcript WebSocket; its status patches the sidebar immediately.
+- **Live project/session list** — the sidebar polls projects, sessions, worktrees,
+  and the cached agent catalog every three seconds while visible, including changes
+  from other clients. Selecting a session opens the one full transcript WebSocket;
+  its status patches the sidebar immediately.
 - **Live transcript** — streamed agent output rendered as markdown, collapsible
   tool cards with git-style diffs and terminal-style command blocks, inline
   approval prompts (including the agent's own multiple-choice options and a
@@ -202,8 +203,8 @@ is testable without a browser.
 changes, not a new state, so a streaming turn touches exactly one node — the
 trailing agent message. No virtual DOM, and a long transcript stays smooth.
 
-**One full socket, for the selected session.** The sidebar polls `/sessions`
-for lightweight metadata; selecting a row opens its transcript stream and
+**One full socket, for the selected session.** The sidebar polls `/projects`,
+`/sessions`, `/worktrees`, and `/agents` for catalog metadata; selecting a row opens its transcript stream and
 replaces the previous pane. Socket status wins for that row and patches its dot
 immediately, while the poll owns every unselected row.
 
@@ -519,7 +520,7 @@ null `reset_at` on an otherwise good read is normal and means no countdown — i
 is never rendered as an epoch date.
 
 Every read queries both providers live with no cache behind it and takes about
-a second, so it is not folded into the three-second session poll. The panel owns
+a second, so it is not folded into the three-second catalog poll. The panel owns
 its own minute-scale timer while it is open, and a second, cheaper timer
 re-renders the countdowns from values already in hand.
 
