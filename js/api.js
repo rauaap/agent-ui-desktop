@@ -150,6 +150,9 @@ export const deleteSharedAssetRoot = (name) =>
 
 export const listProjects = () => request('GET', '/projects').then(each(asProject));
 
+/** Fresh absolute-path -> boolean snapshot; missing keys are unknown. */
+export const getDirectoryExistence = () => request('GET', '/directory-existence');
+
 export const createProject = (path, name, sandbox_network_allowlist) =>
   request('POST', '/projects', {
     path, name,
@@ -193,9 +196,9 @@ export const deleteProject = (path) => request('DELETE', '/projects', { path });
  *
  * A worktree is its own resource: several sessions can share one, and it
  * outlives the sessions that used it. Each row is `{id, project_id, path,
- * branch, created_at, session_count, exists}` — `branch` is the branch it was
- * *created on* rather than live state, `session_count` may legitimately be 0,
- * and `exists` is a stat of `path` at request time.
+ * branch, created_at, session_count}` — `branch` is the branch it was
+ * *created on* rather than live state and `session_count` may legitimately be 0.
+ * Directory existence comes separately from `GET /directory-existence`.
  */
 export const listWorktrees = (projectPath) => request(
   'GET',
@@ -218,10 +221,10 @@ export const createWorktree = (projectPath, path, branch) =>
 /**
  * Removes the directory (`git worktree remove`, never `--force`) and the row.
  *
- * A 409 means nothing was removed and the row still stands: either sessions are
- * still attached, or git counts the tree as dirty — and it counts untracked
- * files, so any worktree an agent did real work in refuses. That is the common
- * path, not an error.
+ * Attached sessions become former-worktree sessions, preserving their working
+ * directory, history, settings and archive state. A 409 leaves metadata intact:
+ * a directory-dependent session is busy or Git refuses safe removal. Refetch
+ * catalogs followed by directory existence on success or failure.
  */
 export const deleteWorktree = (id) => request('DELETE', `/worktrees/${id}`);
 

@@ -1536,6 +1536,7 @@ export function sessionSettingsDialog(state, handlers = {}) {
 
       const ids = el('div', 'details');
       idDetail(ids, 'Session ID', state.id);
+      if (state.directoryExists === false) detail(ids, 'Working directory', 'MISSING');
       if (state.worktreeId !== null && state.worktreeId !== undefined) {
         idDetail(ids, 'Worktree ID', state.worktreeId);
       }

@@ -8,6 +8,8 @@
  */
 
 import * as api from './api.js';
+import { directoryExists } from './directory-existence.js';
+import { fetchCatalogSnapshot } from './catalog-snapshot.js';
 import { authBlocked, showTokenPrompt } from './auth.js';
 import { agentPreference, setAgentPreference } from './agents.js';
 import { modelLabel, reasoningLevels } from './models.js';
@@ -52,6 +54,7 @@ let projectsAccepted = 0;
 let projects = [];
 let sessionsById = new Map();
 let worktrees = [];
+let directoryExistence = {};
 /** Serialize rapid permission toggles per session so their PATCHes cannot land out of order. */
 const permissionUpdates = new Map();
 /** The agents `GET /agents` last offered, with their model catalogs — see `js/agents.js`. */
@@ -175,6 +178,7 @@ const metaFrom = (session, project) => ({
   projectId: session.project_id ?? null,
   projectPath: project?.path ?? '',
   workingDir: session.working_dir,
+  directoryExists: directoryExists(directoryExistence, session.working_dir),
   worktreeId: session.worktree_id ?? null,
   agent: session.agent,
   model: session.model ?? null,
@@ -193,6 +197,7 @@ const locationMetaFrom = (session, project) => ({
   projectId: session.project_id ?? null,
   projectPath: project?.path ?? '',
   workingDir: session.working_dir,
+  directoryExists: directoryExists(directoryExistence, session.working_dir),
   worktreeId: session.worktree_id ?? null,
   // Fixed at creation, so REST can never contradict the socket about it.
   model: session.model ?? null,
@@ -248,7 +253,7 @@ function acceptSessions(sessions, since, requestId, connection) {
     });
   }
 
-  sidebar.setData(projects, sessions, worktrees, agents);
+  sidebar.setData(projects, sessions, worktrees, agents, directoryExistence);
   sidebar.setActive(workspace.activeId);
   workspace.pruneMissing(new Set(sessionsById.keys()));
   return true;
@@ -284,26 +289,19 @@ async function refresh({ silent = false } = {}) {
   const since = settingsSync.checkpoint();
   const requestId = ++catalogRequest;
   try {
-    // Worktrees come along unfiltered: they are wanted in three places — the
-    // tree's tooltips, the new-session picker and project settings — and one
-    // list is cheaper than a filtered fetch each time a dialog opens.
-    // Include the server's cached agent catalog so a restart is reflected too.
-    // It fails independently, keeping the last usable picker choices.
-    const [nextProjects, sessions, nextWorktrees, nextAgents] = await Promise.all([
-      api.listProjects(),
-      api.listSessions(),
-      api.listWorktrees(),
-      api.listAgents().catch(() => agents),
-    ]);
-    // Overlapping action/focus refreshes must not roll the catalog backwards.
-    if (requestId >= projectsAccepted) {
-      projectsAccepted = requestId;
-      projects = nextProjects;
-      worktrees = nextWorktrees;
-      agents = nextAgents;
-    }
+    // The sidebar and dialogs share the unfiltered, in-memory catalogs.
+    const snapshot = await fetchCatalogSnapshot(api, { agents });
+    // Keep one request identity through retries: an older refresh cannot
+    // become newer than an action/focus refresh that already published.
+    if (requestId < projectsAccepted) return { projects, sessions: [...sessionsById.values()], worktrees };
+    projectsAccepted = requestId;
+    projects = snapshot.projects;
+    worktrees = snapshot.worktrees;
+    agents = snapshot.agents;
+    directoryExistence = snapshot.existence;
+    const sessions = snapshot.sessions;
     if (!acceptSessions(sessions, since, requestId, connection)) {
-      sidebar.setData(projects, [...sessionsById.values()], worktrees, agents);
+      sidebar.setData(projects, [...sessionsById.values()], worktrees, agents, directoryExistence);
     }
     return { projects, sessions, worktrees };
   } catch (error) {
@@ -633,30 +631,28 @@ async function adoptCollision(project, path) {
 }
 
 /** Sessions whose preserved cwd is the path of this registered worktree. */
-const formerSessionsForWorktree = (worktree) => [...sessionsById.values()].filter((session) => {
-  if (String(session.project_id) !== String(worktree.project_id)) return false;
-  const project = projectFor(session);
-  return isFormerWorktree(session, project?.path)
-    && normalize(session.working_dir) === normalize(worktree.path);
-});
+const formerSessionsForWorktree = (worktree) => [...sessionsById.values()].filter((session) =>
+  (session.worktree_id === null || session.worktree_id === undefined)
+    && normalize(session.working_dir) === normalize(worktree.path));
 
 async function removeWorktree(worktree) {
   // `exists: false` is the recovery path, not a deletion: git prunes its own
   // admin files and the row goes, but there is nothing on disk left to remove.
   const gone = worktree.exists === false;
-  const archivedFormer = formerSessionsForWorktree(worktree)
-    .filter((session) => !!session.archived_at);
-  const dependencyWarning = !gone && archivedFormer.length
-    ? ` ${archivedFormer.length} archived session${archivedFormer.length === 1 ? '' : 's'} `
-      + `${archivedFormer.length === 1 ? 'uses' : 'use'} this as a former working directory. `
-      + 'Removing it prevents those sessions from being unarchived unless a directory is '
-      + 'recreated at this exact path.'
+  const attached = sessionsOnWorktree(worktree.id);
+  const detached = formerSessionsForWorktree(worktree).length;
+  const dependencyWarning = attached || detached
+    ? ` ${attached} attached and ${detached} already-detached sessions use this directory. `
+      + 'Their transcripts, settings and archive state are preserved; attached sessions become '
+      + 'former-worktree sessions and all keep this exact working directory. '
+      + 'They cannot run here while the directory is missing, and archived sessions cannot '
+      + 'be unarchived until a directory is recreated at this exact path.'
     : '';
   const confirmed = await confirmDialog(
     gone ? `Clean up “${baseOf(worktree.path)}”?` : `Remove “${baseOf(worktree.path)}”?`,
     gone
       ? `${worktree.path} is already gone from the server. This tidies away the record of it `
-        + 'and git’s own administrative files.'
+        + 'and git’s own administrative files.' + dependencyWarning
       : `git removes ${worktree.path}. Any branch it was on stays; only the checkout goes. If `
         + 'it still holds uncommitted or untracked work, git refuses and nothing is removed.'
         + dependencyWarning,
@@ -680,28 +676,16 @@ async function removeWorktree(worktree) {
 }
 
 /**
- * The three ways `DELETE /worktrees/{id}` declines, none of which the user
+ * The ways `DELETE /worktrees/{id}` declines, none of which the user
  * should read as an error. Awaited, because the caller reopens project settings
  * over the top of it otherwise.
  */
 function reportWorktreeKept(worktree, detail) {
-  if (/using this worktree/i.test(detail)) {
-    // Explain the independent operations, but do not turn this refusal into a
-    // guided cleanup flow or perform any of them automatically.
+  if (/busy/i.test(detail)) {
     return noticeDialog(
-      'Sessions are still using this worktree',
-      'Nothing was removed. A live session must be deleted, or archived and then detached '
-      + 'from Session settings. An archived session can be detached there directly. Retry '
-      + 'after every attached session has been detached or deleted.',
-      [detail],
-    );
-  }
-  if (/live detached session/i.test(detail)) {
-    return noticeDialog(
-      'Live sessions still use this directory',
-      'Nothing was removed. These sessions kept this former worktree as their working '
-      + 'directory when they were detached. Archive them before trying again; they will not '
-      + 'be archived automatically.',
+      'Sessions are busy in this directory',
+      'Nothing was removed. Stop or wait for active agent turns and shell commands using '
+      + 'this directory to finish, then retry. Idle and archived sessions do not block removal.',
       [detail],
     );
   }
@@ -713,6 +697,7 @@ function reportWorktreeKept(worktree, detail) {
     'Worktree left in place',
     `${worktree.path} has uncommitted work, so it was left in place. Commit or discard the `
     + 'changes there, then try again.',
+    [detail],
   );
 }
 

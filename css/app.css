@@ -199,11 +199,11 @@ body.sidebar-resizing * { cursor: col-resize !important; user-select: none !impo
 .session:hover .gear { opacity: 1; }
 .gear:hover { color: var(--ink); background: var(--panel-hover); }
 
-/* "the directory this row describes is not on disk" — a project's, a
- * session's worktree, or a worktree's in the project settings list. */
+/* The effective directory is missing, independently of worktree association. */
 .project .missing,
+.wt-path .missing,
 .session .missing,
-.wt-path .missing {
+.pane-dir .missing {
   flex: none;
   font-family: var(--font);
   font-size: 10px;

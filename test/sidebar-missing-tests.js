@@ -15,6 +15,7 @@ try {
   sidebar.selectedIds = new Set();
   sidebar.agents = [];
   sidebar.worktrees = new Map([['7', { id: '7', exists: false, branch: 'fix' }]]);
+  sidebar.directoryExistence = { '/project-fix': false };
   sidebar.gear = () => new Node('span');
   const project = { id: '1', path: '/project' };
   const session = { id: '10', name: 'Session', worktree_id: '7', working_dir: '/project-fix' };
@@ -28,9 +29,10 @@ try {
     assert.match(row.title, /the directory is missing/);
   }
   for (const exists of [true, undefined]) {
-    sidebar.worktrees.set('7', { id: '7', exists });
+    sidebar.directoryExistence = exists === undefined ? {} : { '/project-fix': exists };
     assert.equal(missing(sidebar.sessionRow(session, project, false)).length, 0);
   }
+  sidebar.directoryExistence = {};
   sidebar.worktrees.clear();
   assert.equal(missing(sidebar.sessionRow(session, project, false)).length, 0);
   for (const working_dir of ['/project', '/project-fix']) {

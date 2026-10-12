@@ -585,6 +585,11 @@ export class SessionPane {
     this.nameView.textContent = state.name || '';
     this.dirText.textContent = state.workingDir || '';
     this.dirView.title = state.workingDir || '';
+    if (!this.missingTag) {
+      this.missingTag = el('span', 'missing', 'MISSING');
+      this.dirView.appendChild(this.missingTag);
+    }
+    this.missingTag.style.display = state.directoryExists === false ? '' : 'none';
     const formerWorktree = isFormerWorktree(state);
     this.worktreeTag.style.display = state.worktreeId || formerWorktree ? '' : 'none';
     this.worktreeTag.classList.toggle('former', formerWorktree);

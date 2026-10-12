@@ -19,6 +19,7 @@ import { agentName } from './agents.js';
 import { modelLabel } from './models.js';
 import { byArchivedAt, filedAt, filedLabel, isArchived, partition } from './archive.js';
 import { isFormerWorktree } from './worktree.js';
+import { directoryExists } from './directory-existence.js';
 
 const EXPANDED_KEY = 'agent-ui.expanded';
 
@@ -93,9 +94,10 @@ export class Sidebar {
     this.root.addEventListener('scroll', () => this.closeMenu());
   }
 
-  setData(projects, sessions, worktrees = [], agents = []) {
-    const metadataChanged = JSON.stringify([this.projects, [...this.worktrees.values()], this.agents])
-      !== JSON.stringify([projects, worktrees, agents]);
+  setData(projects, sessions, worktrees = [], agents = [], directoryExistence = {}) {
+    const metadataChanged = JSON.stringify([this.projects, [...this.worktrees.values()], this.agents, this.directoryExistence ?? {}])
+      !== JSON.stringify([projects, worktrees, agents, directoryExistence]);
+    this.directoryExistence = directoryExistence;
     this.projects = projects;
     this.worktrees = new Map(worktrees.map((w) => [String(w.id), w]));
     this.agents = agents;
@@ -160,13 +162,14 @@ export class Sidebar {
    * nothing updates, hence "created on" rather than a bare branch name.
    */
   worktreeNote(session, project) {
+    const missing = directoryExists(this.directoryExistence, session.working_dir) === false
+      ? '\nthe directory is missing' : '';
     if (isFormerWorktree(session, project.path)) {
-      return `Former worktree: ${session.working_dir}`;
+      return `Former worktree: ${session.working_dir}${missing}`;
     }
     if (session.worktree_id === null || session.worktree_id === undefined) return null;
     const worktree = this.worktrees.get(String(session.worktree_id));
     const branch = worktree?.branch ? `\ncreated on ${worktree.branch}` : '';
-    const missing = worktree?.exists === false ? '\nthe directory is missing' : '';
     return `Worktree: ${session.working_dir}${branch}${missing}`;
   }
 
@@ -326,7 +329,7 @@ export class Sidebar {
       mark.title = where;
       item.appendChild(mark);
     }
-    if (this.worktrees.get(String(session.worktree_id))?.exists === false) {
+    if (directoryExists(this.directoryExistence, session.working_dir) === false) {
       item.appendChild(el('span', 'missing', 'MISSING'));
     }
     if (inArchive) {
