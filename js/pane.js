@@ -7,6 +7,8 @@
  */
 
 import { httpBase } from './auth.js';
+import { getScrollback } from './api.js';
+import { TranscriptHistory } from './transcript-history.js';
 import { ImageViews, uploadImage } from './images.js';
 import { filedLabel } from './archive.js';
 import { idChip } from './clipboard.js';
@@ -78,7 +80,9 @@ export class SessionPane {
     this.root = el('div', 'pane');
     this.root.appendChild(this.buildHead());
 
+    this.history = new TranscriptHistory(sessionId, store, getScrollback, handlers.onError);
     this.transcript = new TranscriptView(sessionId, store, {
+      onHistory: () => this.history.load(),
       serverBase: httpBase,
       onApproval: (requestId, optionId, behavior, message) => {
         if (!this.socket.sendApproval(requestId, behavior, optionId, message)) {
@@ -678,6 +682,7 @@ export class SessionPane {
     this.unsubscribe();
     this.fileTree.close();
     this.socket.close();
+    this.history.destroy();
     this.transcript.destroy();
     this.root.remove();
   }

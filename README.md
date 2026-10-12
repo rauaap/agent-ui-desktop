@@ -630,6 +630,7 @@ node test/sandbox-network-dialog-tests.js  # network editor DOM smoke test
 node test/shared-assets-tests.js  # shared assets dialogs and server-relative Markdown links
 node test/shared-assets-api-tests.js  # shared asset CRUD transport
 node test/scroll-follow-tests.js  # user navigation vs incidental scrolling
+node test/transcript-history-tests.js  # backward pagination, deduplication and stale responses
 ```
 
 or open `test/index.html` in a browser, which needs nothing installed at all.

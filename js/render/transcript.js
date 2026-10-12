@@ -68,6 +68,20 @@ export class TranscriptView {
     this.list.tabIndex = 0;
     this.scrolling = new ScrollFollow(this.list, () => this.updateScrollButton(),
       () => this.handlers.onNavigate?.());
+    this.onHistoryScroll = () => {
+      if (this.list.scrollTop <= 1 && !this.followBottom) this.handlers.onHistory?.();
+    };
+    this.onHistoryWheel = (event) => {
+      if (event.deltaY < 0 && this.list.scrollTop <= 1) this.handlers.onHistory?.();
+    };
+    this.onHistoryKey = (event) => {
+      if (['Home', 'PageUp', 'ArrowUp'].includes(event.key) && this.list.scrollTop <= 1) {
+        this.handlers.onHistory?.();
+      }
+    };
+    this.list.addEventListener('scroll', this.onHistoryScroll);
+    this.list.addEventListener('wheel', this.onHistoryWheel, { passive: true });
+    this.list.addEventListener('keydown', this.onHistoryKey);
 
     // Anything that changes the transcript's width or height reflows every row
     // and so moves the bottom: a zoom change, a window resize, the sidebar being
@@ -90,6 +104,9 @@ export class TranscriptView {
     this.images.dispose();
     this.resizeObserver.disconnect();
     this.scrolling.destroy();
+    this.list.removeEventListener('scroll', this.onHistoryScroll);
+    this.list.removeEventListener('wheel', this.onHistoryWheel);
+    this.list.removeEventListener('keydown', this.onHistoryKey);
     this.unsubscribe();
     this.unsubscribeDirectory();
     this.nodes.clear();
@@ -108,6 +125,30 @@ export class TranscriptView {
 
     for (const change of changes) {
       switch (change.op) {
+        case 'prepend': {
+          const previousHeight = this.list.scrollHeight;
+          const viewport = this.list.getBoundingClientRect();
+          const anchorNode = [...this.nodes.values()].find((node) =>
+            node.transcriptEventIds?.length && node.getBoundingClientRect().bottom > viewport.top
+              && node.getBoundingClientRect().top < viewport.bottom);
+          const anchor = anchorNode && {
+            ids: anchorNode.transcriptEventIds,
+            top: anchorNode.getBoundingClientRect().top,
+            bottom: anchorNode.getBoundingClientRect().bottom,
+          };
+          this.rebuild({ wasAtBottom: false, scrollTop: previousScrollTop });
+          const replacement = anchor && [...this.nodes.values()].find((node) =>
+            node.transcriptEventIds?.some((id) => anchor.ids.includes(id)));
+          let top = previousScrollTop + this.list.scrollHeight - previousHeight;
+          if (replacement) {
+            // If older output merged into the first bubble, keep its existing
+            // tail visible rather than anchoring to the newly extended start.
+            const edge = replacement.transcriptEventIds[0] === anchor.ids[0] ? 'top' : 'bottom';
+            top = this.list.scrollTop + replacement.getBoundingClientRect()[edge] - anchor[edge];
+          }
+          this.restoreScroll(false, top);
+          return;
+        }
         case 'reset':
           this.rebuild({ wasAtBottom, scrollTop: previousScrollTop });
           return;
@@ -384,6 +425,7 @@ export class TranscriptView {
     }
     if (row.kind === 'user') this.images.append(node.querySelector('.msg-user') || node, row.images);
     node.dataset.key = String(row.key);
+    node.transcriptEventIds = row.eventIds;
     if (this.query) this.applyQueryTo(node, row);
     return node;
   }

@@ -141,6 +141,36 @@ try {
   await settle();
   assert.equal((await page.evaluate(() => snapshot())).follow, true, 'wheel reaching bottom resumes following');
 
+  // Native scrolling to the top loads chronological history without moving
+  // the previously visible first row, and exhaustion prevents repeated fetches.
+  await page.evaluate(() => {
+    store.apply('1', { type: 'output', text: 'Persisted tail', event_id: 1000 });
+    window.historyCalls = 0;
+    pane.history.fetchPage = async (id, before) => {
+      historyCalls++;
+      if (id !== '1' || before !== 1000) throw Error('Wrong history cursor');
+      window.anchorTop = view.nodes.get(store.session('1').rows[0].key).getBoundingClientRect().top;
+      return {
+        messages: Array.from({ length: 200 }, (_, i) => ({
+          id: i + 1, type: i % 2 ? 'output' : 'input',
+          payload: { text: `Older event ${i}` },
+        })), next_cursor: 1, has_more: false,
+      };
+    };
+  });
+  await page.mouse.wheel({ deltaY: -100000 });
+  await settle();
+  assert.equal(await page.evaluate(() => historyCalls), 1, 'top scrolling requests one page');
+  const anchorShift = await page.evaluate(() => {
+    const row = store.session('1').rows.find(r => r.text === 'Message 0');
+    return view.nodes.get(row.key).getBoundingClientRect().top - anchorTop;
+  });
+  assert.ok(Math.abs(anchorShift) <= 1, 'prepending preserves the visible row anchor');
+  assert.equal((await page.evaluate(() => snapshot())).follow, false, 'history does not jump to bottom');
+  await page.mouse.wheel({ deltaY: -100000 });
+  await settle();
+  assert.equal(await page.evaluate(() => historyCalls), 1, 'exhaustion prevents another request');
+
   await page.evaluate(() => workspace.openSession('2'));
   await settle();
   assert.equal((await page.evaluate(() => pane.transcript.scrolling.listeners.length)), 0, 'switching sessions removes old input listeners');

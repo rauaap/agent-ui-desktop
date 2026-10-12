@@ -102,6 +102,11 @@ export const listAgents = () => request('GET', '/agents').then(normalizeAgents);
  */
 export const getUsage = () => request('GET', '/usage');
 
+/** Nearest older persisted events, in chronological order (exclusive cursor). */
+export const getScrollback = (sessionId, before) => request(
+  'GET', `/sessions/${wireId(sessionId)}/scrollback?before=${encodeURIComponent(before)}&limit=200`,
+);
+
 /* ------------------------------------------------------------------ */
 /* projects                                                           */
 /* ------------------------------------------------------------------ */

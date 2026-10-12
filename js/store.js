@@ -24,9 +24,8 @@ import { actionLabel, actionSummary, isCanonicalAction, prettyJson } from './too
 import { isFormerWorktree } from './worktree.js';
 
 /**
- * Live transcript cap. The server replays at most 200 rows on connect
- * (SCROLLBACK_REPLAY_LIMIT in main.py), so only a long-running live session can
- * grow past this; older rows are dropped from the top.
+ * Live transcript cap before history is requested. Expanded history retains
+ * all loaded rows so backward pagination cannot immediately evict its results.
  */
 export const MAX_ROWS = 400;
 
@@ -130,6 +129,7 @@ function blankState(id) {
     connectionEpoch: 0,
     connected: false,
     rows: [],
+    history: { events: [], ids: new Set(), oldest: null, hasMore: true, expanded: false },
     nextKey: 1,
     // The agent message currently accepting chunks, or null.
     openBubble: null,
@@ -290,18 +290,53 @@ export class Store {
     // Settings and reasoning levels are never replayed history. Apply
     // immediately to both copies so a dropped replay cannot lose a live update.
     if (event.type === 'settings' || event.type === 'reasoning_level') {
-      const changes = reduce(this.session(id), event);
+      const changes = applyEvent(this.session(id), event);
       const shadow = this.replays.get(id);
-      if (shadow) reduce(shadow, event);
+      if (shadow) applyEvent(shadow, event);
       this.emit(id, changes);
       return;
     }
     const replaying = this.replays.get(id);
     const state = replaying ?? this.session(id);
-    const changes = reduce(state, event);
+    const changes = applyEvent(state, event);
     // A buffered replay is invisible until it commits, so nothing to emit.
     if (!replaying) this.emit(id, changes);
   }
+
+  /** Re-run chronological history so fragments and resolutions cross page boundaries. */
+  prependHistory(id, events, nextCursor, hasMore) {
+    const live = this.session(id);
+    const history = live.history;
+    const older = events.filter((event) => {
+      if (history.ids.has(event.event_id)) return false;
+      history.ids.add(event.event_id);
+      return true;
+    });
+    history.events = [...older, ...history.events];
+    history.oldest = nextCursor;
+    history.hasMore = hasMore;
+    history.expanded = true;
+    const rebuilt = blankState(id);
+    rebuilt.history = history;
+    rebuilt.nextKey = live.nextKey;
+    for (const event of history.events) reduce(rebuilt, event);
+    // Only transcript-owned fields are historical. Keep live settings, status,
+    // connectivity and location metadata authoritative.
+    for (const key of ['rows', 'nextKey', 'openBubble', 'pendingApprovalId',
+      'pendingQuestionId', 'queue', 'acceptedIds', 'shippedIds']) live[key] = rebuilt[key];
+    this.emit(id, [{ op: 'prepend' }]);
+  }
+}
+
+function applyEvent(state, event) {
+  const history = state.history;
+  if (event.event_id != null) {
+    if (history.ids.has(event.event_id)) return [];
+    history.ids.add(event.event_id);
+    history.oldest = history.oldest === null ? event.event_id : Math.min(history.oldest, event.event_id);
+  }
+  history.events.push(event);
+  return reduce(state, event);
 }
 
 function newRow(state, row) {
@@ -316,7 +351,7 @@ function append(state, row, changes, extra = null) {
   changes.push({ op: 'append', row, ...extra });
   // Trim from the front once past the cap, so a very long session cannot grow
   // the transcript without bound.
-  while (state.rows.length > MAX_ROWS) {
+  while (!state.history?.expanded && state.rows.length > MAX_ROWS) {
     const dropped = state.rows.shift();
     if (state.openBubble === dropped) state.openBubble = null;
     changes.push({ op: 'remove', row: dropped });
@@ -337,7 +372,7 @@ function findRow(state, predicate) {
 
 const APPROVAL_KINDS = new Set(['allow_once', 'allow_always', 'reject_once', 'reject_always']);
 const exactEventKeys = (event, required, optional = []) => {
-  const keys = Object.keys(event);
+  const keys = Object.keys(event).filter((key) => key !== 'event_id');
   return required.every((key) => keys.includes(key))
     && keys.every((key) => required.includes(key) || optional.includes(key));
 };
@@ -628,6 +663,15 @@ export function reduce(state, event) {
       break;
   }
 
+  // Keep each persisted event's rendering lineage. A row can span many
+  // output fragments, or replace a tool card, so one row is not one cursor.
+  if (event.event_id != null) {
+    for (const change of changes) {
+      if (!change.row || !['append', 'update'].includes(change.op)) continue;
+      change.row.eventIds ??= [];
+      if (!change.row.eventIds.includes(event.event_id)) change.row.eventIds.push(event.event_id);
+    }
+  }
   return changes;
 }
 
