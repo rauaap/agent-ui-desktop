@@ -40,7 +40,7 @@ let error;
 const notices = [];
 const context = vm.createContext({
   sessionsOnWorktree: () => 2,
-  formerSessionsForWorktree: () => [{ archived_at: null }, { archived_at: 'date' }],
+  formerSessionsForWorktree: () => [{ id: '3' }, { id: '4' }],
   baseOf: () => 'checkout',
   confirmDialog: async (...args) => { confirmation = args; return true; },
   api: { deleteWorktree: async () => { deleted++; if (error) throw error; } },
@@ -51,7 +51,7 @@ const context = vm.createContext({
 vm.runInContext(source.slice(start, end), context);
 await context.removeWorktree({ id: 'w', path: '/checkout', exists: true });
 assert.match(confirmation[1], /2 attached and 2 already-detached/);
-assert.match(confirmation[1], /archive state are preserved/);
+assert.match(confirmation[1], /queued inputs and settings are preserved/);
 assert.match(confirmation[1], /exact working directory/);
 assert.equal(deleted, 1);
 assert.equal(refreshed, 1);

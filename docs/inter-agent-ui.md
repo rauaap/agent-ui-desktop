@@ -106,7 +106,6 @@ different from both:
      each time the row is drawn, not when the message arrives, so renames show
      up.
   3. `#42`: monospace, in `faint`.
-  4. An `ARCHIVED` tag if the sender is archived. The link still works.
 - **Body:** plain text with line breaks kept, the same as the user bubble. Don't
   render it as Markdown, because it's input, not agent output.
 - **Copy:** copies the body text. On desktop the button appears on hover in the
@@ -156,12 +155,11 @@ copy, the label briefly changes to `copied` (desktop) or a toast reads
 ### Session list (sidebar / Android drawer)
 
 The context menu (right-click on desktop, long-press on Android) gets a copy
-item directly above Archive:
+item below the project tree:
 
 ```
     Copy session ID          ← one session selected
     Copy 3 session IDs       ← multiple selected; copies "42, 43, 51"
-    Archive
     Delete…
 ```
 

@@ -9,29 +9,18 @@
  * routes, so the grouping happens here — the same thing the Android client
  * does.
  *
- * Neither list endpoint filters the archive out, so the split is this file's
- * job too: the tree proper holds what is live, and an **Archived** section
- * below it holds the rest in the same project -> session shape. See
- * `archive.js` for the rules its ordering follows.
+ * All retained sessions appear under their project in server order.
  */
 
 import { agentName } from './agents.js';
 import { modelLabel } from './models.js';
-import { byArchivedAt, filedAt, filedLabel, isArchived, partition } from './archive.js';
 import { isFormerWorktree } from './worktree.js';
 import { directoryExists } from './directory-existence.js';
 
 const EXPANDED_KEY = 'agent-ui.expanded';
 
-/**
- * Expansion is remembered per row, and a project with archived sessions is
- * drawn in both halves, so the archive's keys are prefixed to keep the two
- * copies independent — collapsing a project in the archive should not collapse
- * it above. A project path is always absolute, so nothing it could be can
- * collide with these.
- */
-const SECTION_KEY = 'archived';
-const archiveKey = (project) => `archived:${project.path}`;
+/** Shift-click ranges stay within one project's session rows. */
+const selectionScopeFor = (project) => String(project.id || project.path);
 
 const el = (tag, className, text) => {
   const node = document.createElement(tag);
@@ -139,9 +128,7 @@ export class Sidebar {
         const project = this.projects.find((row) => belongsTo(session, row));
         this.selectedIds = new Set([key]);
         this.selectionAnchor = key;
-        this.selectionScope = project
-          ? `${isArchived(session) ? 'archived' : 'live'}:${project.id || project.path}`
-          : null;
+        this.selectionScope = project ? selectionScopeFor(project) : null;
       }
     }
     this.paintSelection();
@@ -181,14 +168,14 @@ export class Sidebar {
     return session.status || 'idle';
   }
 
-  /** Each project with its sessions split by the server's `archived_at`. */
+  /** Each project with all matching sessions. */
   groups() {
     return this.projects.map((project) => {
       const projectMatches = (project.name || project.path).toLowerCase().includes(this.query);
       const sessions = this.sessions.filter((session) => belongsTo(session, project)
         && (projectMatches || (session.name || String(session.id)).toLowerCase().includes(this.query)));
-      return { project, projectMatches, ...partition(sessions) };
-    }).filter((group) => group.projectMatches || group.live.length || group.archived.length);
+      return { project, projectMatches, sessions };
+    }).filter((group) => group.projectMatches || group.sessions.length);
   }
 
   render() {
@@ -205,84 +192,29 @@ export class Sidebar {
     }
 
     const groups = this.groups();
-    // An archived project leaves the tree entirely — that is what archiving it
-    // was for — and by the server's own invariant it has no live sessions to
-    // strand up here. A live project stays put however many of its sessions
-    // have been filed away.
-    for (const group of groups) {
-      if (!isArchived(group.project) && (group.projectMatches || group.live.length)) {
-        this.renderProject(group, false);
-      }
-    }
-
-    // A project belongs in the archive if it is archived itself, or if any of
-    // its sessions are: an archived session has to be reachable under the
-    // project it was created in either way.
-    const filed = groups.filter((g) => isArchived(g.project) || g.archived.length);
-    if (filed.length) this.renderArchive(filed);
+    for (const group of groups) this.renderProject(group);
     if (!this.root.children.length) {
       this.root.appendChild(el('div', 'tree-empty', 'No matching projects or sessions.'));
     }
   }
 
   /** One project row plus, when open, its sessions. */
-  renderProject(group, inArchive) {
-    const { project } = group;
-    const sessions = inArchive ? byArchivedAt(group.archived) : group.live;
-    const key = inArchive ? archiveKey(project) : project.path;
+  renderProject(group) {
+    const { project, sessions } = group;
+    const key = project.path;
     const open = this.query ? !this.searchCollapsed.has(key) : this.expanded.has(key);
-    // Inside the archive, a project that is *itself* archived is a different
-    // thing from a live one that merely holds archived sessions: only the
-    // former can be brought back, and only the former is dimmed.
-    const projectArchived = isArchived(project);
-
-    const row = el('button', `project${open ? ' open' : ''}`
-      + `${inArchive && projectArchived ? ' archived' : ''}`);
+    const row = el('button', `project${open ? ' open' : ''}`);
     row.dataset.key = key;
     row.appendChild(el('span', 'twisty', '▸'));
     row.appendChild(el('span', 'pname', project.name || project.path));
     if (project.exists === false) row.appendChild(el('span', 'missing', 'MISSING'));
 
-    if (inArchive) {
-      const count = el('span', 'count', String(group.archived.length));
-      count.title = projectArchived
-        ? `Archived ${filedLabel(project.archived_at)} · `
-          + `${plural(group.archived.length, 'session')} filed with it`
-        : plural(group.archived.length, 'archived session');
-      row.appendChild(count);
-    } else {
-      // Archived sessions are deliberately not folded into this count — the
-      // server keeps the two apart, and so does the row: the badge beside it
-      // says how many are filed away, and opens the archive at this project.
-      const count = el('span', 'count', String(group.live.length));
-      count.title = plural(group.live.length, 'live session');
-      row.appendChild(count);
-      if (group.archived.length) {
-        const badge = el('span', 'archived-count', `${group.archived.length} archived`);
-        badge.title = 'Show these in the archive';
-        badge.addEventListener('click', (event) => {
-          event.stopPropagation();
-          this.reveal(project);
-        });
-        row.appendChild(badge);
-      }
-    }
-
-    // The one-click way back, on the rows that are the archive. Safe and
-    // reversible, unlike forgetting — which is why that one stays behind the
-    // gear and its second confirmation, and this does not.
-    if (inArchive && projectArchived) {
-      row.appendChild(this.gear('⤺', 'Unarchive this project and the sessions it filed', () => {
-        this.handlers.onUnarchiveProject(project);
-      }));
-    }
-    // A live project's settings belong on its live row; a project that has left
-    // the tree has no other row to carry them.
-    if (!inArchive || projectArchived) {
-      row.appendChild(this.gear('⚙', 'Project settings', () => {
-        this.handlers.onProjectSettings(project);
-      }));
-    }
+    const count = el('span', 'count', String(sessions.length));
+    count.title = plural(sessions.length, 'session');
+    row.appendChild(count);
+    row.appendChild(this.gear('⚙', 'Project settings', () => {
+      this.handlers.onProjectSettings(project);
+    }));
 
     row.addEventListener('click', () => this.toggle(key));
     this.root.appendChild(row);
@@ -291,29 +223,23 @@ export class Sidebar {
 
     const list = el('div', 'sessions');
 
-    // Keep the frequent creation action first, before the project's existing
-    // sessions. There is no equivalent in the archive: the server refuses one
-    // in an archived project, and for a live project it would land above.
-    if (!inArchive) {
-      const add = el('button', 'add-row', '+  New session');
-      add.addEventListener('click', () => this.handlers.onNewSession(project));
-      list.appendChild(add);
-    }
+    const add = el('button', 'add-row', '+  New session');
+    add.addEventListener('click', () => this.handlers.onNewSession(project));
+    list.appendChild(add);
 
     for (const session of sessions) {
-      list.appendChild(this.sessionRow(session, project, inArchive));
+      list.appendChild(this.sessionRow(session, project));
     }
 
     this.root.appendChild(list);
   }
 
-  sessionRow(session, project, inArchive) {
+  sessionRow(session, project) {
     const id = String(session.id);
     const active = id === String(this.activeId);
     const selected = this.selectedIds.has(id);
-    const scope = `${inArchive ? 'archived' : 'live'}:${project.id || project.path}`;
-    const item = el('button', `session${active ? ' active' : ''}${selected ? ' selected' : ''}`
-      + `${inArchive ? ' archived' : ''}`);
+    const scope = selectionScopeFor(project);
+    const item = el('button', `session${active ? ' active' : ''}${selected ? ' selected' : ''}`);
     item.dataset.id = id;
     item.dataset.scope = scope;
     item.appendChild(el('span', `dot ${this.statusOf(session)}`));
@@ -332,14 +258,6 @@ export class Sidebar {
     if (directoryExists(this.directoryExistence, session.working_dir) === false) {
       item.appendChild(el('span', 'missing', 'MISSING'));
     }
-    if (inArchive) {
-      // Unarchiving from the row rather than only from session settings: those
-      // are behind opening the session, which is the one thing archiving says
-      // you are done doing.
-      item.appendChild(this.gear('⤺', 'Unarchive this session', () => {
-        this.handlers.onUnarchiveSession(session);
-      }));
-    }
     // The server's label for the agent, falling back to the id it stored —
     // which is what a session started under an agent this server no longer
     // registers shows, rather than nothing.
@@ -347,8 +265,7 @@ export class Sidebar {
     // A legacy session has no model and shows none.
     const model = modelLabel(this.agents, session.agent, session.model);
     item.title = `${session.name}\n#${id}\n${agent}${model ? ` · ${model}` : ''}`
-      + (where ? `\n${where}` : '')
-      + (inArchive ? `\nArchived ${filedLabel(session.archived_at)}` : '');
+      + (where ? `\n${where}` : '');
     item.addEventListener('click', (event) => {
       this.selectSession(session, scope, event.shiftKey);
       this.handlers.onOpenSession(session);
@@ -462,10 +379,6 @@ export class Sidebar {
     action(sessions.length > 1 ? `Copy ${sessions.length} session IDs` : 'Copy session ID', () => {
       this.handlers.onCopyIds(sessions);
     });
-    const archived = sessions.every(isArchived);
-    action(archived ? 'Unarchive' : 'Archive', () => {
-      this.handlers.onArchiveSessions(sessions, !archived);
-    });
     action(`Delete${sessions.length > 1 ? ` ${sessions.length} sessions` : ''}…`,
       () => this.handlers.onDeleteSessions(sessions), true);
 
@@ -492,25 +405,6 @@ export class Sidebar {
     this.menuTarget = null;
   }
 
-  renderArchive(groups) {
-    const open = this.query ? !this.searchCollapsed.has(SECTION_KEY) : this.expanded.has(SECTION_KEY);
-    const total = groups.reduce((sum, g) => sum + g.archived.length, 0);
-
-    const head = el('button', `tree-section${open ? ' open' : ''}`);
-    head.appendChild(el('span', 'twisty', '▸'));
-    head.appendChild(el('span', 'pname', 'Archived'));
-    head.appendChild(el('span', 'count', String(total)));
-    head.title = `${plural(total, 'archived session')} in ${plural(groups.length, 'project')}`;
-    head.addEventListener('click', () => this.toggle(SECTION_KEY));
-    this.root.appendChild(head);
-
-    if (!open) return;
-    // Most recently filed first, which is not the order the server sent: it
-    // sorts projects by last activity, and an archived project's is always
-    // null, so its list arrives with the archive heaped at the end.
-    for (const group of [...groups].sort(compareGroups)) this.renderProject(group, true);
-  }
-
   toggle(key) {
     // Search-only collapses last until the query changes, not in saved layout.
     if (this.query) {
@@ -525,21 +419,6 @@ export class Sidebar {
     this.render();
   }
 
-  /** Open the archive at one project — where its "N archived" badge points. */
-  reveal(project) {
-    if (this.query) {
-      this.searchCollapsed.delete(SECTION_KEY);
-      this.searchCollapsed.delete(archiveKey(project));
-    } else {
-      this.expanded.add(SECTION_KEY);
-      this.expanded.add(archiveKey(project));
-      saveExpanded([...this.expanded]);
-    }
-    this.render();
-    const row = this.root.querySelector(`[data-key="${cssEscape(archiveKey(project))}"]`);
-    row?.scrollIntoView?.({ block: 'nearest' });
-  }
-
   /**
    * Expand whichever part of the tree holds a session opened from elsewhere —
    * an agent message's sender can be in any project — and scroll to its row.
@@ -547,7 +426,7 @@ export class Sidebar {
   revealSession(session) {
     const project = this.projects.find((row) => belongsTo(session, row));
     if (!project) return;
-    const keys = isArchived(session) ? [SECTION_KEY, archiveKey(project)] : [project.path];
+    const keys = [project.path];
     if (this.query && keys.some((key) => this.searchCollapsed.has(key))) {
       for (const key of keys) this.searchCollapsed.delete(key);
       this.render();
@@ -585,10 +464,9 @@ export class Sidebar {
   }
 }
 
-/** Newest-filed first, over whichever timestamp put the project in the archive. */
 const ROW_FIELDS = [
   'id', 'project_id', 'name', 'working_dir', 'worktree_id', 'agent',
-  'archived_at', 'last_active_at',
+  'last_active_at',
 ];
 
 /** Whether a poll changed anything represented by the tree beyond its dots. */
@@ -598,15 +476,6 @@ function sessionRowsChanged(before, after) {
     if (ROW_FIELDS.some((field) => before[i]?.[field] !== after[i]?.[field])) return true;
   }
   return false;
-}
-
-function compareGroups(a, b) {
-  const left = filedAt(a.project, a.archived);
-  const right = filedAt(b.project, b.archived);
-  if (left === right) return 0;
-  if (!left) return 1;
-  if (!right) return -1;
-  return left < right ? 1 : -1;
 }
 
 /** A project path can hold quotes and backslashes; an attribute selector can't. */

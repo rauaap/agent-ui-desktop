@@ -13,10 +13,9 @@ import { fetchCatalogSnapshot } from './catalog-snapshot.js';
 import { authBlocked, showTokenPrompt } from './auth.js';
 import { agentPreference, setAgentPreference } from './agents.js';
 import { modelLabel, reasoningLevels } from './models.js';
-import { partition } from './archive.js';
 import { copyText } from './clipboard.js';
 import { SessionDirectory } from './inter-agent.js';
-import { Store, isBusy } from './store.js';
+import { Store } from './store.js';
 import { SettingsSync, settingsMeta } from './session-settings.js';
 import { Sidebar, belongsTo } from './sidebar.js';
 import { Workspace } from './workspace.js';
@@ -39,7 +38,7 @@ import {
   setWorktreeTemplate,
   worktreeTemplate,
 } from './dialogs.js';
-import { baseOf, isFormerWorktree, normalize } from './worktree.js';
+import { baseOf, normalize } from './worktree.js';
 
 const store = new Store();
 /** Every session, for naming the senders and targets of inter-agent messages. */
@@ -87,7 +86,6 @@ const workspace = new Workspace(
   {
     onSettings: openSessionSettings,
     onStop: stopSession,
-    onUnarchive: (id) => setSessionArchived(id, false),
     onError: (message) => toast(message, true),
     onConnected: () => refresh(),
     onLiveEvent: (id, event) => {
@@ -101,16 +99,6 @@ const workspace = new Workspace(
         if (session) session.status = event.status || 'idle';
         sidebar.refreshStatuses();
       }
-      // Archiving moves a row between the two halves of the tree, which the
-      // dots-only repaint cannot do. The next poll would catch it, but an
-      // explicit refresh makes a local or remote archive feel immediate.
-      if (event.type === 'archived'
-          && (event.archived_at ?? null) !== (sessionsById.get(String(id))?.archived_at ?? null)) {
-        refresh();
-      }
-      // This event carries the session's new location but not the former
-      // worktree id whose count decreased, so refresh all three lists.
-      if (event.type === 'worktree_detached') refresh();
     },
     onActiveChange: (id) => {
       notifier.setActive(id);
@@ -130,10 +118,7 @@ const sidebar = new Sidebar(document.getElementById('tree'), store, {
   },
   onNewSession: createSession,
   onProjectSettings: openProjectSettings,
-  onUnarchiveProject: (project) => setProjectArchived(project, false),
-  onUnarchiveSession: (session) => setSessionArchived(session.id, false),
   onPermissions: setSessionPermissions,
-  onArchiveSessions: setSessionsArchived,
   onDeleteSessions: deleteSessions,
   onCopyIds: async (sessions) => {
     await copyText(sessions.map((session) => String(session.id)).join(', '));
@@ -170,21 +155,14 @@ document.addEventListener('visibilitychange', () => {
  *
  * `working_dir` is still the cwd the agent runs in and still means exactly what
  * it did. A null `worktree_id` normally means the project directory, except
- * after explicit detachment, when the preserved cwd differs from the project
+ * after worktree removal, when the preserved cwd differs from the project
  * path and is presented as a former worktree.
  */
 const metaFrom = (session, project) => ({
+  ...locationMetaFrom(session, project),
   name: session.name,
-  projectId: session.project_id ?? null,
-  projectPath: project?.path ?? '',
-  workingDir: session.working_dir,
-  directoryExists: directoryExists(directoryExistence, session.working_dir),
-  worktreeId: session.worktree_id ?? null,
   agent: session.agent,
-  model: session.model ?? null,
-  reasoningLevel: session.reasoning_level,
   status: session.status,
-  archivedAt: session.archived_at ?? null,
   ...settingsMeta(session),
   sandboxSaving: settingsSync.pending.has(String(session.id)),
 });
@@ -207,8 +185,8 @@ const locationMetaFrom = (session, project) => ({
 
 /**
  * Metadata a REST snapshot may write without overruling the selected session's
- * live socket. Location is REST-owned because worktree detachment is not
- * replayed; status, archive state and name remain socket-owned. Settings are
+ * live socket. Location is REST-owned because worktree removal has no socket
+ * event; status and name remain socket-owned. Settings are
  * reconciled separately because there is no settings snapshot on connect.
  */
 const metaFor = (session) => (workspace.isOpen(session.id)
@@ -373,10 +351,6 @@ async function openProjectSettings(project) {
       current,
       sessions,
       worktreesFor(current),
-      // Named in the dialog so the refusal is visible before the button rather
-      // than after it. Not a substitute for handling the 409: a session running
-      // a shell command stays `idle` here and is busy to the server.
-      partition(sessions).live.filter((s) => isBusy(statusOf(s))),
     );
     if (result?.action === 'forget') {
       await forgetProject(current);
@@ -384,35 +358,6 @@ async function openProjectSettings(project) {
     }
     if (result?.action === 'session') {
       await createSession(current);
-      return;
-    }
-    // Archiving a project is the gesture for being done with it, so it closes
-    // the dialog rather than reopening it over a tree the project has just left.
-    if (result?.action === 'archive' || result?.action === 'unarchive') {
-      const archiving = result.action === 'archive';
-      if (archiving) {
-        // Use the counts on the project row: those are the contract's live and
-        // archived totals, and together are the real size of the cascade the
-        // confirmation has to disclose before making the single PATCH.
-        const reported = Number(current.session_count)
-          + Number(current.archived_session_count);
-        const total = Number.isFinite(reported) ? reported : sessions.length;
-        const title = total
-          ? `Archive “${current.name || current.path}” and ${total} session${total === 1 ? '' : 's'}?`
-          : `Archive “${current.name || current.path}”?`;
-        const confirmed = await confirmDialog(
-          title,
-          'The project and its sessions stay readable, but no new work can start until they '
-          + 'are unarchived.'
-          + (worktreesFor(current).length
-            ? ' Its worktrees are not archived or removed; they stay on disk as they are.'
-            : ''),
-          'Archive',
-          false,
-        );
-        if (!confirmed) return;
-      }
-      await setProjectArchived(current, archiving);
       return;
     }
     if (result?.action === 'shared-assets') await openSharedAssets(current);
@@ -424,49 +369,6 @@ async function openProjectSettings(project) {
     // Both actions refreshed; re-resolve so the reopened dialog shows the
     // project as it is now, and give up on one that has gone away meanwhile.
     current = projects.find((p) => String(p.id) === String(current.id));
-  }
-}
-
-/**
- * Archive or unarchive a whole project. One call: the server cascades to the
- * sessions, and a 409 means it wrote nothing at all — including for the idle
- * sessions — so there is no partial state to reconcile, just a refresh.
- */
-async function setProjectArchived(project, archived) {
-  try {
-    const result = await api.setProjectArchived(project.path, archived);
-    await refresh();
-    // `sessions_affected` is the server's own count of what moved, which is not
-    // the same as how many sessions the project has: unarchiving restores only
-    // what this project's archive swept up, leaving anything filed by hand.
-    const moved = result?.sessions_affected ?? 0;
-    const sessionResult = archived
-      ? `${moved} session${moved === 1 ? '' : 's'} newly archived`
-      : `${moved} session${moved === 1 ? '' : 's'} restored`;
-    // Report zero too. In particular, an unarchive can honestly restore no
-    // sessions because all of them had been archived by hand beforehand.
-    toast(`${archived ? 'Archived' : 'Unarchived'} ${project.name || project.path}; ${sessionResult}`);
-  } catch (error) {
-    if (!archived) reportUnarchiveFailure(error);
-    else fail(error);
-  }
-}
-
-/**
- * Archive or unarchive one session.
- *
- * Unarchiving one silently unarchives its project too, when that project was
- * archived — so both lists are stale afterwards and this refetches rather than
- * patching the tree in place.
- */
-async function setSessionArchived(id, archived) {
-  try {
-    await api.setSessionArchived(id, archived);
-    await refresh();
-    toast(archived ? 'Session archived' : 'Session unarchived');
-  } catch (error) {
-    if (!archived) reportUnarchiveFailure(error);
-    else fail(error);
   }
 }
 
@@ -495,48 +397,12 @@ async function setSessionPermissions(session, write, command, interAgent) {
   }
 }
 
-/** Archive a selected range with one refresh, even when one row is refused. */
-async function setSessionsArchived(sessions, archived) {
-  const results = await Promise.allSettled(
-    sessions.map((session) => api.setSessionArchived(session.id, archived)),
-  );
-  await refresh();
-
-  const failures = results.filter((result) => result.status === 'rejected');
-  const changed = results.length - failures.length;
-  if (changed) {
-    toast(`${changed} session${changed === 1 ? '' : 's'} ${archived ? 'archived' : 'unarchived'}`);
-  }
-  if (failures.length) {
-    const error = failures[0].reason;
-    if (!archived && failures.length === 1) reportUnarchiveFailure(error);
-    else fail(failures.length === 1
-      ? error
-      : new Error(`${failures.length} sessions could not be ${archived ? 'archived' : 'unarchived'}`));
-  }
-}
-
-/** A missing cwd is unrecoverable at the harness layer, so keep it archived. */
-function reportUnarchiveFailure(error) {
-  if (error?.status === 409 && /director(?:y|ies).*missing|missing.*director/i.test(error.message)) {
-    toast(`${error.message}. Recreate a directory at the same absolute path, then retry.`, true);
-  } else {
-    fail(error);
-  }
-}
-
-/** The live status if the session is open, else the last one the list gave. */
-const statusOf = (session) => (store.has(session.id)
-  ? store.session(session.id).status
-  : session.status || 'idle');
-
 async function forgetProject(project) {
   const sessions = sessionsFor(project);
   const confirmed = await forgetProjectDialog(
     project,
     sessions.length,
     worktreesFor(project).length,
-    partition(sessions).archived.length,
   );
   if (!confirmed) return;
   try {
@@ -643,10 +509,9 @@ async function removeWorktree(worktree) {
   const detached = formerSessionsForWorktree(worktree).length;
   const dependencyWarning = attached || detached
     ? ` ${attached} attached and ${detached} already-detached sessions use this directory. `
-      + 'Their transcripts, settings and archive state are preserved; attached sessions become '
+      + 'Their transcripts, queued inputs and settings are preserved; attached sessions become '
       + 'former-worktree sessions and all keep this exact working directory. '
-      + 'They cannot run here while the directory is missing, and archived sessions cannot '
-      + 'be unarchived until a directory is recreated at this exact path.'
+      + 'They cannot run here while the directory is missing.'
     : '';
   const confirmed = await confirmDialog(
     gone ? `Clean up “${baseOf(worktree.path)}”?` : `Remove “${baseOf(worktree.path)}”?`,
@@ -685,7 +550,7 @@ function reportWorktreeKept(worktree, detail) {
     return noticeDialog(
       'Sessions are busy in this directory',
       'Nothing was removed. Stop or wait for active agent turns and shell commands using '
-      + 'this directory to finish, then retry. Idle and archived sessions do not block removal.',
+      + 'this directory to finish, then retry. Idle sessions do not block removal.',
       [detail],
     );
   }
@@ -766,7 +631,6 @@ async function openSessionSettings(id) {
     write: state.autoApproveWrite,
     command: state.autoApproveCommand,
     interAgent: state.autoApproveInterAgent,
-    archived: !!state.archivedAt,
   };
   const result = await sessionSettingsDialog(state, {
     getState: () => store.has(id) ? store.session(id) : { ...state, connected: false },
@@ -792,35 +656,6 @@ async function openSessionSettings(id) {
   });
   if (!result) return;
 
-  if (result.detached) {
-    const confirmed = await confirmDialog(
-      `Detach “${state.name}” from its worktree?`,
-      `The session stays archived and keeps ${state.workingDir} as its working directory. `
-      + 'Nothing on disk changes now. If that worktree is later removed, this session cannot '
-      + 'be unarchived until a directory is recreated at the exact same path.',
-      'Detach',
-      false,
-    );
-    if (!confirmed) return;
-    try {
-      const session = await api.detachSessionWorktree(id);
-      store.setMeta(id, locationMetaFrom(session, projectFor(session)));
-      await refresh();
-      toast('Session detached from its worktree; the directory is unchanged');
-    } catch (error) {
-      // The operation is idempotent while archived. A refresh also reconciles a
-      // request whose response was lost after the server completed it.
-      await refresh();
-      const current = sessionsById.get(String(id));
-      if (current && isFormerWorktree(current, projectFor(current)?.path)) {
-        toast('Session detached from its worktree; the directory is unchanged');
-      } else {
-        fail(error);
-      }
-    }
-    return;
-  }
-
   if (result.deleted) {
     await deleteSessions([state]);
     return;
@@ -844,24 +679,10 @@ async function openSessionSettings(id) {
         result.autoApproveInterAgent !== before.interAgent ? result.autoApproveInterAgent : undefined,
       ));
     }
-    // Last, and on its own: it is the one field here that can be refused (409
-    // while the session is busy), and a refusal should not also lose the rename
-    // typed beside it. Unarchiving may take the project with it, which is why
-    // the refresh below reloads both lists.
-    if (result.archived !== before.archived) {
-      await api.setSessionArchived(id, result.archived);
-    }
   } catch (error) {
-    if (result.archived === false && result.archived !== before.archived) {
-      reportUnarchiveFailure(error);
-    } else {
-      fail(error);
-    }
+    fail(error);
   }
-  // The server broadcasts `renamed`, `reasoning_level`, `settings` and
-  // `archived` to every subscriber, so the store updates itself; this is for
-  // the tree, which has no socket. In the `finally` position because a rejected archive still leaves
-  // whatever was applied before it to be shown.
+  // Refresh the catalog even after a partial settings save.
   await refresh();
 }
 

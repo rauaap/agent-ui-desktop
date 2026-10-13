@@ -54,12 +54,10 @@ function session(...events) {
 const transcript = (state) => state.rows.map((r) => [r.kind, r.text, r.from?.sessionId ?? null]);
 const pending = (state) => state.queue.map((q) => [q.messageId, q.text, q.from?.sessionId ?? null]);
 
-test('queue: a busy send is not refused, only archive and sandbox saves are', () => {
-  const busy = { status: 'running', archivedAt: null, sandboxSaving: false };
+test('queue: a busy send is not refused, only sandbox saves are', () => {
+  const busy = { status: 'running', sandboxSaving: false };
   equal(sendRefusal(busy, parseComposerInput('next')), null);
   equal(sendRefusal({ ...busy, status: 'awaiting_approval' }, parseComposerInput('next')), null);
-  equal(typeof sendRefusal({ ...busy, archivedAt: '2026-10-01' }, parseComposerInput('x')), 'string');
-  equal(typeof sendRefusal({ ...busy, archivedAt: '2026-10-01' }, parseComposerInput('!ls')), 'string');
   equal(typeof sendRefusal({ ...busy, sandboxSaving: true }, parseComposerInput('x')), 'string');
   // Bash is unchanged: busy and sandbox saves never stop a command.
   equal(sendRefusal({ ...busy, sandboxSaving: true }, parseComposerInput('!ls')), null);

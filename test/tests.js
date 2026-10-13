@@ -12,7 +12,6 @@
  */
 
 import { agentName, defaultAgent, normalizeAgents, preferredAgent } from '../js/agents.js';
-import { byArchivedAt, filedAt, isArchived, partition } from '../js/archive.js';
 import {
   completionToken,
   componentMatchIndex,
@@ -62,7 +61,7 @@ function searchSidebar() {
   sidebar.sessions = [
     { id: '10', project_id: '1', name: 'Search UI', working_dir: '/worktree' },
     { id: '11', project_id: '1', name: 'Layout' },
-    { id: '12', project_id: '2', name: 'Search backend', archived_at: '2026-01-01' },
+    { id: '12', project_id: '2', name: 'Search backend' },
   ];
   sidebar.query = '';
   sidebar.searchCollapsed = new Set();
@@ -100,9 +99,9 @@ test('sidebar search: collapse is temporary and a changed query expands results 
   sidebar.scrollToTop = () => {};
   sidebar.setQuery('search');
   sidebar.toggle('/desktop');
-  sidebar.toggle('archived');
+  sidebar.toggle('/server');
   assertEqual(sidebar.searchCollapsed.has('/desktop'), true);
-  assertEqual(sidebar.searchCollapsed.has('archived'), true);
+  assertEqual(sidebar.searchCollapsed.has('/server'), true);
   sidebar.setSessions(sidebar.sessions.map((session) => ({ ...session, name: 'Renamed' })));
   assertEqual(sidebar.searchCollapsed.has('/desktop'), true, 'poll rebuild preserves collapse');
   sidebar.toggle('/desktop');
@@ -121,17 +120,17 @@ test('sidebar search: session matches retain parents and respect worktree owners
   sidebar.query = 'search';
   const groups = sidebar.groups();
   assertEqual(groups.length, 2);
-  assertEqual(groups[0].live.length, 1);
-  assertEqual(groups[0].live[0].id, '10');
-  assertEqual(groups[1].live.length, 0);
-  assertEqual(groups[1].archived[0].id, '12');
+  assertEqual(groups[0].sessions.length, 1);
+  assertEqual(groups[0].sessions[0].id, '10');
+  assertEqual(groups[1].sessions.length, 1);
+  assertEqual(groups[1].sessions[0].id, '12');
 });
 
 test('sidebar search: project matches include all sessions, paths back up unnamed projects', () => {
   const sidebar = searchSidebar();
   sidebar.query = 'desktop';
   assertEqual(sidebar.groups().length, 1);
-  assertEqual(sidebar.groups()[0].live.length, 2);
+  assertEqual(sidebar.groups()[0].sessions.length, 2);
   sidebar.query = 'empty';
   assertEqual(sidebar.groups()[0].project.id, '3');
   sidebar.query = 'not found';
@@ -604,7 +603,6 @@ const freshState = () => ({
   worktreeId: null,
   agent: 'claude-code',
   status: 'idle',
-  archivedAt: null,
   autoApproveWrite: false,
   autoApproveCommand: false,
   autoApproveInterAgent: false,
@@ -1390,115 +1388,6 @@ test('agents: an id we were not told about shows as itself', () => {
   assertEqual(agentName([], 'pi'), 'pi');
 });
 
-/* ------------------------------------------------------------------ */
-/* archive                                                            */
-/* ------------------------------------------------------------------ */
-
-const at = (id, archived_at = null) => ({ id, archived_at });
-
-test('archive: a row is archived when the server has stamped it', () => {
-  assertTrue(!isArchived(at('a')), 'null is live');
-  assertTrue(isArchived(at('a', '2026-08-26T11:02:00Z')));
-  assertTrue(!isArchived(undefined), 'a missing row is not archived');
-});
-
-test('archive: partition splits on archived_at, keeping server order', () => {
-  const rows = [at('a'), at('b', '2026-08-01T00:00:00Z'), at('c'), at('d', '2026-08-02T00:00:00Z')];
-  const { live, archived } = partition(rows);
-  assertEqual(live.map((s) => s.id).join(''), 'ac');
-  assertEqual(archived.map((s) => s.id).join(''), 'bd');
-});
-
-test('archive: byArchivedAt puts the most recently filed first', () => {
-  const rows = [
-    at('older', '2026-08-01T09:00:00Z'),
-    at('newest', '2026-08-26T11:02:00Z'),
-    at('middle', '2026-08-14T22:30:00Z'),
-  ];
-  assertEqual(byArchivedAt(rows).map((r) => r.id).join(' '), 'newest middle older');
-});
-
-test('archive: byArchivedAt does not disturb the list it was given', () => {
-  const rows = [at('a', '2026-08-01T00:00:00Z'), at('b', '2026-08-09T00:00:00Z')];
-  byArchivedAt(rows);
-  assertEqual(rows.map((r) => r.id).join(''), 'ab', 'sorted a copy');
-});
-
-test('archive: a row with no timestamp sorts last rather than first', () => {
-  const rows = [at('none'), at('filed', '2026-08-01T00:00:00Z')];
-  assertEqual(byArchivedAt(rows).map((r) => r.id).join(' '), 'filed none');
-});
-
-test('archive: an archived project is filed at its own timestamp', () => {
-  const project = at('p', '2026-08-26T11:02:00Z');
-  // The cascade stamps its sessions at the same moment, but a session archived
-  // by hand beforehand carries an older one; the project's own stamp wins.
-  const sessions = [at('s1', '2026-08-26T11:02:00Z'), at('s2', '2026-07-01T00:00:00Z')];
-  assertEqual(filedAt(project, sessions), '2026-08-26T11:02:00Z');
-});
-
-test('archive: a live project is filed at its newest archived session', () => {
-  const sessions = [at('s1', '2026-07-01T00:00:00Z'), at('s2', '2026-08-14T22:30:00Z')];
-  assertEqual(filedAt(at('p'), sessions), '2026-08-14T22:30:00Z');
-  assertEqual(filedAt(at('p'), []), null, 'nothing filed, nothing to date');
-});
-
-test('reducer: an archived event files the session away and brings it back', () => {
-  const s = feed(freshState(),
-    { type: 'archived', archived_at: '2026-08-26T11:02:00Z' },
-  );
-  assertEqual(s.archivedAt, '2026-08-26T11:02:00Z');
-  reduce(s, { type: 'archived', archived_at: null });
-  assertEqual(s.archivedAt, null, 'null brings it back');
-});
-
-test('reducer: an archived event is authoritative, not a toggle', () => {
-  const s = feed(freshState(),
-    { type: 'archived', archived_at: '2026-08-26T11:02:00Z' },
-    // Sent again on every reconnect; receiving it twice must not undo it.
-    { type: 'archived', archived_at: '2026-08-26T11:02:00Z' },
-  );
-  assertEqual(s.archivedAt, '2026-08-26T11:02:00Z');
-});
-
-test('store: a reconnect replay keeps the session archived', () => {
-  const store = new Store();
-  store.apply('s', { type: 'archived', archived_at: '2026-08-26T11:02:00Z' });
-  store.beginReplay('s');
-  // A replay carries scrollback and a trailing status, not the metadata the
-  // session already had — which the shadow state has to bring across itself.
-  store.apply('s', { type: 'output', text: 'hi' });
-  store.apply('s', { type: 'status', status: 'idle' });
-  store.commitReplay('s');
-  assertEqual(store.session('s').archivedAt, '2026-08-26T11:02:00Z');
-});
-
-test('reducer: worktree_detached preserves the cwd and clears the association', () => {
-  const s = freshState();
-  s.worktreeId = '7';
-  s.workingDir = '/projects/app-fix';
-  feed(s, {
-    type: 'worktree_detached',
-    worktree_id: null,
-    working_dir: '/projects/app-fix',
-  });
-  assertEqual(s.worktreeId, null);
-  assertEqual(s.workingDir, '/projects/app-fix');
-  assertTrue(isFormerWorktree(s));
-});
-
-test('reducer: duplicate worktree_detached events are idempotent', () => {
-  const s = freshState();
-  const event = {
-    type: 'worktree_detached',
-    worktree_id: null,
-    working_dir: '/projects/app-fix',
-  };
-  feed(s, event, event);
-  assertEqual(s.worktreeId, null);
-  assertEqual(s.workingDir, '/projects/app-fix');
-});
-
 test('store: replay preserves former-worktree location metadata', () => {
   const store = new Store();
   store.setMeta('s', {
@@ -1512,7 +1401,7 @@ test('store: replay preserves former-worktree location metadata', () => {
   assertTrue(isFormerWorktree(store.session('s')));
 });
 
-test('store: REST detachment during replay is not swapped back out', () => {
+test('store: REST worktree removal during replay is not swapped back out', () => {
   const store = new Store();
   store.setMeta('s', {
     projectPath: '/projects/app',
@@ -1520,8 +1409,7 @@ test('store: REST detachment during replay is not swapped back out', () => {
     worktreeId: '7',
   });
   store.beginReplay('s');
-  // worktree_detached is not sent on reconnect, so a list refresh can be the
-  // only authority that catches an offline detach while replay is in flight.
+  // Removal has no socket event; the REST refresh owns the saved location.
   store.setMeta('s', {
     projectPath: '/projects/app',
     workingDir: '/projects/app-fix',

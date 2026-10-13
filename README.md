@@ -138,13 +138,6 @@ CSP intentionally allows only same-origin connections; the supported path is
 - **Bash mode** — a message starting with `!` runs as a shell command in the
   session's working directory instead of going to the agent. `\!` sends a prompt
   that really does start with an exclamation mark.
-- **Archive** — file a session you are done with under **Archived** in the
-  sidebar, from its settings; a project's settings archive the project and every
-  session in it in one call. The archive has the same project → session shape as
-  the tree above it, ordered by when things were filed. Archived sessions stay
-  open-able and readable — only new prompts and commands are refused — and
-  nothing is deleted. The state is the server's, so it is the same on every
-  device and arrives live over the WebSocket.
 - **Search and export** — filter and highlight within a transcript, or export
   the whole session as markdown.
 - **Subscription usage** — the **U** in the sidebar header opens a panel of
@@ -174,8 +167,7 @@ js/
   session-settings.js settings reconciliation and sandbox save guards — no DOM
   usage.js            subscription quotas: plans, windows, staleness — no DOM
   tools.js            canonical action validation, labels, and summaries
-  sidebar.js          the project/session tree, and the archive below it
-  archive.js          reading `archived_at`: split, order, label — no DOM
+  sidebar.js          the project/session tree
   workspace.js        selected pane and socket lifecycle
   pane.js             one session: header, transcript, composer
   dialogs.js          native <dialog> forms for CRUD and settings
@@ -373,8 +365,8 @@ worktrees.
 It used to be created inside `POST /sessions` and destroyed with the session
 that made it. It is now `POST /worktrees`, `GET /worktrees`,
 `DELETE /worktrees/{id}`, and a `worktree_id` on the session. A null id normally
-means the project directory; an explicitly detached session is the exception,
-keeping its former worktree path as its effective `working_dir`.
+means the project directory; a former-worktree session is the exception,
+keeping its saved worktree path as its effective `working_dir` after removal.
 
 That turns three UI decisions:
 
@@ -386,14 +378,13 @@ That turns three UI decisions:
   it did to the worktree, the new one says the worktree is still there when the
   last session on it goes — a note, not a nudge, because finishing a session
   does not mean finishing with the branch.
-- Removing a worktree is its own action, in project settings. Attached sessions
-  block it; the refusal names them and explains that archived sessions can be
-  detached later from Session settings, without turning the error into a guided
-  cleanup flow. A live detached session also blocks removal while its preserved
-  cwd is active. Removal is never forced and **git counts untracked files as
-  dirty**, so one an agent did real work in refuses: the *common* path, phrased
-  as information. git's own suggestion to `--force` it is not passed on,
-  because the server takes no force flag and the fix is in the worktree.
+- Removing a worktree is its own action, in project settings. Busy agent turns
+  and shell commands using its path block removal; idle sessions do not.
+  Attached sessions keep their exact working directory and become former-worktree
+  sessions. Removal is never forced and **git counts untracked files as dirty**.
+  Refreshes fetch catalogs then `/directory-existence` together; missing paths
+  remain readable and configurable, with ordinary errors when attempting to run.
+  See [worktree removal](docs/worktree-removal.md).
 
 ### The path is the client's problem
 
@@ -550,73 +541,21 @@ two, or slices one — that last was a uuid-era habit and would now throw on a
 number. `request_id` and an approval option's `id` are minted by the agent
 or the approval protocol, are strings already, and are left alone.
 
-### The archive is server state the client only sorts
+### All retained records are ordinary projects and sessions
 
-`archived_at` is a nullable timestamp on both a project row and a session row:
-null is live, an ISO 8601 UTC string is when it was filed. Neither list endpoint
-filters — `GET /projects` and `GET /sessions` return everything with the field
-attached — so splitting the tree from the archive is entirely this client's job,
-and `archive.js` is that job with no DOM and no state of its own.
-
-Two rules fall out of the server's shape and are easy to get wrong:
-
-- **Do not reuse the server's order for the archive.** `GET /projects` sorts by
-  `last_active_at` descending, and an archived project's `last_active_at` is
-  always null, so the whole archive arrives heaped at the end in no useful
-  sequence. The archive sorts itself by `archived_at` descending instead — for a
-  live project holding archived sessions, by the newest of those sessions, since
-  that is when it acquired a row down there at all.
-- **Archived and live session counts stay apart.** A live project's count is its
-  live sessions; anything filed away sits beside it as a separate `3 archived`
-  badge that opens the archive at that project. Folding them together would
-  overstate what is actually running.
-
-Archiving a project is one `PATCH /projects` that cascades server-side, so the
-confirmation names the number of sessions going with it. Unarchiving restores
-only what that cascade took — a session filed by hand beforehand stays filed —
-which is why the toast reports the server's `sessions_affected` rather than a
-count guessed here. Unarchiving a *session* silently unarchives its project too
-(a live session under an archived project would have nowhere to show), so it
-refetches both lists rather than patching one row. No session is brought back
-unless its effective working directory still exists as a directory: that is a
-harness requirement whether the path is its project, a current worktree, or a
-former one.
-
-Detaching is deliberately separate from archiving. An archived session that is
-still attached gets **Detach from worktree** in Session settings; the call clears
-its worktree association but preserves the absolute cwd and touches nothing on
-disk. The session is then labelled **Former worktree**, not mistaken for a
-project-directory session. Removing that worktree later may remove the cwd and
-prevent future unarchive until the same absolute directory is recreated.
-
-A busy session cannot be archived. The archive controls are disabled when one is
-running and the project dialog names the offenders, but that guard is not
-sufficient and the `409` path is not optional: a shell command leaves a session
-`idle` while still counting as busy server-side, so a session can look archivable
-here and be refused. A refused project archive writes nothing at all, so there is
-no partial state to unpick.
-
-An archived session still opens, still connects, still replays its scrollback —
-keeping old work readable is the point. What closes is the composer, with the
-reason and an Unarchive button in place of it, because the server refuses both
-prompts and `!` commands with `409 Session is archived`. For the same reason an
-archived project's settings drop **New session** and **New worktree** rather
-than offering a `409`, and the tree stops offering them too.
-
-Two things archiving deliberately does *not* do, both stated in the dialogs
-rather than left to be found out. It does not protect anything from deletion:
-forgetting a project still takes its archived sessions with it. And it does not
-sweep up worktrees — they carry no archive flag, they hold real uncommitted
-work, and the only thing that removes one is the worktree list in project
-settings.
+Projects and sessions have no archive state or explicit worktree-detach action.
+All records appear in the ordinary tree and search results. WebSocket connection
+initialization replays the transcript, then sends `input_queue` and `status`.
+Worktree deletion preserves session identity, transcript, queue, settings and
+absolute working directory, and clears the worktree association. Clients learn
+location changes through catalog refreshes, not a new WebSocket event.
 
 ## Tests
 
 The pure modules — the diff, the markdown parser, the reducer, file-tree protocol
 state, Bash completion and escaping, the worktree path template, session
-location and detachment, the id coercion, the agent list, model catalogs and
-the archive's
-split and ordering — have unit tests. Sandbox tests also cover settings races,
+location after worktree removal, the id coercion, the agent list and model
+catalogs — have unit tests. Sandbox tests also cover settings races,
 reconnects, pending-save guards, and mocked REST contracts. Most of the original
 tests were ported from the Android
 client's `LineDiffTest`, `MarkdownTest` and `WorktreeTest`:
@@ -625,6 +564,7 @@ client's `LineDiffTest`, `MarkdownTest` and `WorktreeTest`:
 node test/run.js          # any JS runtime
 node test/auth-tests.js   # token transport, mocked fetch/WebSocket
 node test/image-tests.js  # original-byte uploads, bounded cache, drafts, queue and send gating
+node test/retained-sessions-tests.js  # settings, missing-directory composer and replay
 node test/model-api-tests.js  # /agents catalogs, model and reasoning pickers
 node test/sandbox-network-dialog-tests.js  # network editor DOM smoke test
 node test/shared-assets-tests.js  # shared assets dialogs and server-relative Markdown links

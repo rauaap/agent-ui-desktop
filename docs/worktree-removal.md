@@ -15,10 +15,11 @@ indicates no managed association; MISSING independently indicates a directory
 that does not exist. Recreating a directory clears MISSING without clearing FWT.
 
 Removal confirmations count attached and already-detached sessions using the
-path, whether live or archived. Removal preserves their conversations, settings,
-archive state and exact working directory. Busy agent turns or shell commands
-and Git safe-removal refusals still prevent removal. Archive and explicit
-detachment actions are unchanged.
+path. Removal preserves their conversations, queued inputs, settings and exact
+working directory, clearing attached sessions' worktree associations. Busy agent
+turns or shell commands and Git safe-removal refusals still prevent removal.
+There is no archive state or explicit detachment action. Missing-directory
+sessions remain readable and configurable; running fails through ordinary errors.
 
 `js/catalog-snapshot.js` owns fetching and the bounded retry. `js/app.js` owns
 publication and request ordering; one request identity is retained throughout a

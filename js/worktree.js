@@ -123,7 +123,7 @@ export function absolutize(path, projectPath) {
 /**
  * Whether a session runs at the path of a worktree it used to be attached to.
  *
- * Detachment deliberately makes `worktree_id` null without moving the harness:
+ * Worktree removal makes `worktree_id` null without changing the session path:
  * `working_dir` remains the former worktree path. A null id therefore means the
  * project directory only when that path equals the project's path. Accepts both
  * wire rows (snake_case) and store states (camelCase) so every renderer applies

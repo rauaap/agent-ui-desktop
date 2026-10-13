@@ -19,9 +19,7 @@ import {
   resetLabel,
   usageLevel,
 } from './usage.js';
-import { filedLabel, isArchived, partition } from './archive.js';
 import { suggestName } from './names.js';
-import { isBusy } from './store.js';
 import { canChangeSandbox } from './session-settings.js';
 import {
   DEFAULT_TEMPLATE,
@@ -633,8 +631,7 @@ export function newProjectDialog() {
  * Project settings: what the server knows about a project, and the actions that
  * take the whole thing as their subject.
  *
- * Name and directory are read-only. `PATCH /projects` carries archive state
- * and sandbox paths, but does not rename or move a project;
+ * Name and directory are read-only. `PATCH /projects` carries sandbox paths, but does not rename or move a project;
  * `POST` inserts with `OR IGNORE`, so re-posting an existing path under a new
  * name returns the project unchanged instead of renaming it. Moving a project's
  * path is on the server's roadmap (`projects.id` exists precisely so sessions
@@ -643,22 +640,18 @@ export function newProjectDialog() {
  * and directory are fixed at creation, so they are reported, not offered.
  *
  * Resolves `{action, worktree}` — the action is `'forget'`, `'session'`,
- * `'worktree-new'`, `'worktree-delete'`, `'archive'`, `'unarchive'`, or null
+ * `'worktree-new'`, `'worktree-delete'`, or null
  * for a plain dismissal. They are handed back rather than performed here,
  * because each already has a caller that knows how to run it and what to say
  * afterwards.
  *
  * @param {object} project
- * @param {object[]} sessions every session in it, archived ones included
+ * @param {object[]} sessions every session in it
  * @param {object[]} worktrees from `GET /worktrees?project_path=…`
- * @param {object[]} busy the live sessions that are not idle, which are what
- *   the server refuses a project archive over
  */
-export function projectSettingsDialog(project, sessions, worktrees = [], busy = []) {
+export function projectSettingsDialog(project, sessions, worktrees = []) {
   const inWorktree = sessions.filter((s) => s.worktree_id !== null
     && s.worktree_id !== undefined).length;
-  const { live, archived } = partition(sessions);
-  const filed = isArchived(project);
   let action = null;
   let target = null;
 
@@ -671,17 +664,10 @@ export function projectSettingsDialog(project, sessions, worktrees = [], busy = 
       const facts = el('div', 'details');
       detail(facts, 'Name', project.name || '—');
       detail(facts, 'Directory', project.path, { mono: true });
-      // Live and archived are counted apart, the way the server keeps them: an
-      // archived project reports `session_count: 0` by invariant, and a bare
-      // "0" over a project holding four filed sessions would be a lie.
-      const counts = [filed ? null : String(live.length)];
-      if (archived.length) counts.push(`${archived.length} archived`);
+      const counts = [String(sessions.length)];
       if (inWorktree) counts.push(`${inWorktree} in a worktree`);
       detail(facts, 'Sessions', counts.filter(Boolean).join(' · ') || '0');
-      // `last_active_at` is null for an archived project, always — reporting
-      // "Never" about one that ran for a month would be the same lie.
-      if (filed) detail(facts, 'Archived', whenever(project.archived_at));
-      else detail(facts, 'Last active', whenever(project.last_active_at));
+      detail(facts, 'Last active', whenever(project.last_active_at));
       // `is_git_repo` is a stat of `<path>/.git`, so on a directory that is no
       // longer there it is false for the wrong reason. Say so rather than
       // reporting a plain "No" about a path nobody can look at.
@@ -721,30 +707,9 @@ export function projectSettingsDialog(project, sessions, worktrees = [], busy = 
         body.appendChild(list);
       }
 
-      body.appendChild(el('div', 'dlg-note', filed
-        ? 'Archived. The project and its sessions stay readable and nothing has been '
-          + 'deleted, but no new session or worktree can be started here until it comes '
-          + 'back. Unarchiving restores exactly the sessions this filed away — any '
-          + 'archived by hand beforehand stay where they are.'
-        : 'Name and directory are set when the project is created and cannot be '
-          + 'changed afterwards. Sandbox access can be configured separately below.'));
-
-      if (busy.length) {
-        body.appendChild(el('div', 'dlg-note warn',
-          `${busy.map((s) => s.name).join(', ')} ${busy.length === 1 ? 'is' : 'are'} still `
-          + 'working. A project cannot be archived until every session in it is idle, and '
-          + 'the server refuses the whole call rather than archiving the rest.'));
-      }
-
-      // "Archive" can read as "put away everything to do with this", and a
-      // worktree holds real uncommitted work: say plainly that these are not
-      // swept up, since the only thing that removes one is the list above.
-      if (worktrees.length) {
-        body.appendChild(el('div', 'dlg-note',
-          `Archiving does not touch the ${worktrees.length} worktree`
-          + `${worktrees.length === 1 ? '' : 's'} above — ${worktrees.length === 1 ? 'it stays' : 'they stay'} `
-          + 'on disk with whatever is in them, and are removed only from this list.'));
-      }
+      body.appendChild(el('div', 'dlg-note',
+        'Name and directory are set when the project is created and cannot be '
+        + 'changed afterwards. Sandbox access can be configured separately below.'));
 
       // All of these confirm on their own; the caller takes it from here, and
       // both destructive ones ask again before anything is actually removed.
@@ -759,23 +724,18 @@ export function projectSettingsDialog(project, sessions, worktrees = [], busy = 
       assets.addEventListener('click', () => { action = 'shared-assets'; submit(); });
       buttons.appendChild(assets);
 
-      // An archived project takes a 409 for either of these, so they are hidden
-      // rather than offered and refused — the same rule the worktree button
-      // follows for a directory that is not a repository.
-      if (!filed) {
-        const add = el('button', 'btn', '+  New session…');
-        add.addEventListener('click', (event) => {
-          event.preventDefault();
-          action = 'session';
-          submit();
-        });
-        buttons.appendChild(add);
-      }
+      const add = el('button', 'btn', '+  New session…');
+      add.addEventListener('click', (event) => {
+        event.preventDefault();
+        action = 'session';
+        submit();
+      });
+      buttons.appendChild(add);
 
       // Creating one runs `git worktree add` in a directory that has to be
       // there and has to be a repository; a project failing either would learn
       // it from git's own stderr, which is a confusing place to find out.
-      if (project.is_git_repo && !missing && !filed) {
+      if (project.is_git_repo && !missing) {
         const worktree = el('button', 'btn', '+  New worktree…');
         worktree.addEventListener('click', (event) => {
           event.preventDefault();
@@ -784,23 +744,6 @@ export function projectSettingsDialog(project, sessions, worktrees = [], busy = 
         });
         buttons.appendChild(worktree);
       }
-
-      // Archiving cascades to every session in the project, so the button says
-      // so with the real number rather than leaving it to be discovered.
-      const archive = el('button', 'btn', filed
-        ? 'Unarchive this project'
-        : sessions.length === 0
-          ? 'Archive this project'
-          : sessions.length === 1
-            ? 'Archive this project and its session'
-            : `Archive this project and its ${sessions.length} sessions`);
-      archive.disabled = !filed && busy.length > 0;
-      archive.addEventListener('click', (event) => {
-        event.preventDefault();
-        action = filed ? 'unarchive' : 'archive';
-        submit();
-      });
-      buttons.appendChild(archive);
 
       const danger = el('button', 'btn deny', 'Forget this project…');
       danger.addEventListener('click', (event) => {
@@ -856,7 +799,7 @@ function worktreeRow(worktree, onRemove) {
 }
 
 /** Confirm forgetting a project. Resolves true when confirmed. */
-export function forgetProjectDialog(project, sessionCount, worktreeCount = 0, archivedCount = 0) {
+export function forgetProjectDialog(project, sessionCount, worktreeCount = 0) {
   return show({
     title: `Forget “${project.name || project.path}”?`,
     confirm: 'Forget',
@@ -867,13 +810,7 @@ export function forgetProjectDialog(project, sessionCount, worktreeCount = 0, ar
       if (sessionCount > 0) {
         body.appendChild(el('div', 'dlg-note warn',
           `${sessionCount} session${sessionCount === 1 ? '' : 's'} and their transcripts `
-          + 'will be deleted — sessions are reachable only through their project.'
-          // Archiving is not protection from deletion, and a count that quietly
-          // excluded the archive would imply it was.
-          + (archivedCount
-            ? ` That includes the ${archivedCount} in the archive; archiving keeps work `
-              + 'readable, it does not shield it from this.'
-            : '')));
+          + 'will be deleted — sessions are reachable only through their project.'));
       }
       if (worktreeCount > 0) {
         body.appendChild(el('div', 'dlg-note',
@@ -1501,8 +1438,7 @@ export function createWorktreeDialog(
 }
 
 /**
- * Session settings: rename, reasoning level, auto-approve toggles, archive,
- * detach, delete. Sandbox saves immediately through its dedicated handler;
+ * Session settings: rename, reasoning level, auto-approve toggles, delete. Sandbox saves immediately through its dedicated handler;
  * Cancel does not undo a confirmed sandbox change. The control subscribes to
  * live session metadata.
  *
@@ -1512,7 +1448,7 @@ export function createWorktreeDialog(
  * offer, the current level is shown read-only.
  *
  * Resolves `{name, reasoningLevel, autoApproveWrite, autoApproveCommand,
- * autoApproveInterAgent, archived, detached, deleted}`, or null.
+ * autoApproveInterAgent, deleted}`, or null.
  *
  * @param {object} state the store's session state
  */
@@ -1522,8 +1458,6 @@ export function sessionSettingsDialog(state, handlers = {}) {
   let writeToggle;
   let commandToggle;
   let interAgentToggle;
-  let archiveToggle;
-  let detached = false;
   let deleted = false;
   let unsubscribe;
 
@@ -1623,38 +1557,7 @@ export function sessionSettingsDialog(state, handlers = {}) {
         'Auto-approved tools still appear in the transcript, marked as such. '
         + 'Read-only tools never prompt.'));
 
-      // The archive is server state, so this reads and writes the same flag
-      // every device sees. A busy session cannot go in — and the server refuses
-      // it whatever this says, since a shell command leaves a session `idle`
-      // and still counts as busy.
-      const archived = !!state.archivedAt;
-      archiveToggle = toggle(
-        body,
-        'Archived',
-        archived
-          ? 'Filed away. Unarchive to send prompts again; the transcript is readable either way.'
-          : 'Files the session under Archived, where it stays readable. Nothing is deleted, '
-            + 'and prompts are refused until it comes back.',
-        archived,
-      );
-      if (!archived && isBusy(state.status)) {
-        archiveToggle.disabled = true;
-        body.appendChild(el('div', 'dlg-note warn',
-          'This session is working. Stop it, or wait for the turn to finish, before archiving.'));
-      }
-
-      // Detachment is deliberately a later cleanup action, never part of the
-      // archive gesture. It releases only the database association and leaves
-      // the harness at this same path.
-      if (archived && state.worktreeId !== null && state.worktreeId !== undefined) {
-        const detach = el('button', 'btn', 'Detach from worktree…');
-        detach.addEventListener('click', (event) => {
-          event.preventDefault();
-          detached = true;
-          submit();
-        });
-        body.appendChild(detach);
-      } else if (isFormerWorktree(state)) {
+      if (isFormerWorktree(state)) {
         detail(body, 'Former worktree', state.workingDir, { mono: true });
       }
 
@@ -1677,8 +1580,6 @@ export function sessionSettingsDialog(state, handlers = {}) {
         autoApproveWrite: writeToggle.checked,
         autoApproveCommand: commandToggle.checked,
         autoApproveInterAgent: interAgentToggle.checked,
-        archived: archiveToggle.checked,
-        detached,
         deleted,
       };
     },

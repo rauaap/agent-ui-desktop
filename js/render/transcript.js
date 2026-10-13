@@ -331,7 +331,6 @@ export class TranscriptView {
       link.title = 'Open this session';
       link.addEventListener('click', () => this.handlers.onOpenSession?.(id));
       node.append(link, el('span', 'ref-id', `#${id}`));
-      if (found.session.archived) node.appendChild(el('span', 'ref-tag', 'ARCHIVED'));
     } else {
       node.append(el('span', 'ref-name', found.session.name || 'session'), ' ',
         el('span', 'ref-id', `#${id}`));

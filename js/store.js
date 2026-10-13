@@ -62,11 +62,6 @@ export function parseComposerInput(raw) {
  * @param {{kind: 'bash' | 'input'}} parsed from parseComposerInput
  */
 export function sendRefusal(state, parsed) {
-  // The box is disabled while archived, so this is for the race: the event
-  // that archived the session — from another device, or from a project
-  // archive — can land between the keystroke and the send. Prompts *and*
-  // commands are refused; bash is outside the turn, not outside this.
-  if (state.archivedAt) return 'This session is archived — unarchive it to send anything';
   if (parsed.kind !== 'bash' && state.sandboxSaving) {
     return 'Wait for the sandbox setting to finish saving before starting a turn';
   }
@@ -115,10 +110,6 @@ function blankState(id) {
     // Changeable between turns; arrives as `reasoning_level` events.
     reasoningLevel: null,
     status: 'idle',
-    // When the server filed this session away, or null while it is live.
-    // Server state like `status`, and arriving the same way: on connect, and
-    // again whenever any device changes it.
-    archivedAt: null,
     autoApproveWrite: false,
     autoApproveCommand: false,
     autoApproveInterAgent: false,
@@ -243,7 +234,6 @@ export class Store {
       model: live.model,
       reasoningLevel: live.reasoningLevel,
       status: live.status,
-      archivedAt: live.archivedAt,
       autoApproveWrite: live.autoApproveWrite,
       autoApproveCommand: live.autoApproveCommand,
       autoApproveInterAgent: live.autoApproveInterAgent,
@@ -439,24 +429,6 @@ export function reduce(state, event) {
 
     case 'reasoning_level':
       state.reasoningLevel = event.reasoning_level;
-      changes.push({ op: 'meta' });
-      break;
-
-    // Filed away, or brought back — by this client, by another device, or by a
-    // project archive that swept this session up. Sent on connect too, right
-    // after the status event, so it is authoritative rather than a delta: no
-    // toggling, just take what it says.
-    case 'archived':
-      state.archivedAt = event.archived_at ?? null;
-      changes.push({ op: 'meta' });
-      break;
-
-    // Detachment changes only the database association: the harness remains at
-    // the same absolute path. Unlike `archived`, this is not replayed when a
-    // socket connects, so REST metadata also refreshes these fields.
-    case 'worktree_detached':
-      state.worktreeId = event.worktree_id ?? null;
-      if (event.working_dir) state.workingDir = event.working_dir;
       changes.push({ op: 'meta' });
       break;
 

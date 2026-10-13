@@ -160,22 +160,6 @@ export const createProject = (path, name, sandbox_network_allowlist) =>
   }).then(asProject);
 
 /**
- * Archive or unarchive a project. Addressed by `path` in the body, like
- * `DELETE /projects` — a filesystem path does not belong in a URL segment, and
- * this is the one `PATCH` the route has.
- *
- * Archiving cascades to the project's live sessions; unarchiving restores
- * exactly the ones that cascade took, leaving any archived by hand beforehand
- * where they are. Resolves the project row plus `sessions_affected`, which is
- * the honest number to report and is not `archived_session_count`.
- *
- * A 409 means at least one session is busy and **nothing was written** — the
- * detail names them.
- */
-export const setProjectArchived = (path, archived) =>
-  request('PATCH', '/projects', { path, archived }).then(asProject);
-
-/**
  * Forgets the project, its sessions and its worktrees. The project's own
  * directory is never touched.
  *
@@ -222,7 +206,7 @@ export const createWorktree = (projectPath, path, branch) =>
  * Removes the directory (`git worktree remove`, never `--force`) and the row.
  *
  * Attached sessions become former-worktree sessions, preserving their working
- * directory, history, settings and archive state. A 409 leaves metadata intact:
+ * directory, history, queue and settings. A 409 leaves metadata intact:
  * a directory-dependent session is busy or Git refuses safe removal. Refetch
  * catalogs followed by directory existence on success or failure.
  */
@@ -288,33 +272,6 @@ export const setAutoApprove = (id, write, command, interAgent) =>
  */
 export const setReasoningLevel = (id, reasoning_level) =>
   request('PATCH', `/sessions/${id}`, { reasoning_level }).then(asSession);
-
-/**
- * Archive or unarchive one session. The same partial `PATCH` as the two above,
- * and every field on it is optional, so this disturbs neither the name nor the
- * auto-approve toggles.
- *
- * Unarchiving takes the session's project with it when that project was
- * archived — a live session under an archived project would have nowhere to
- * show — so the projects list is stale afterwards and has to be refetched.
- *
- * A 409 means the session is busy. `status` does not settle that on its own: a
- * shell command keeps a session `idle` and still refuses, so the error path is
- * required however carefully the button is guarded.
- */
-export const setSessionArchived = (id, archived) =>
-  request('PATCH', `/sessions/${id}`, { archived }).then(asSession);
-
-/**
- * Release an archived session's worktree association without moving its
- * harness. The returned row has `worktree_id: null` while `working_dir` keeps
- * the former worktree's absolute path. Nothing on disk is touched.
- *
- * A completed detach may be retried while the session remains archived. A 409
- * means it is live, or that it always ran in the project directory.
- */
-export const detachSessionWorktree = (id) =>
-  request('POST', `/sessions/${id}/detach-worktree`).then(asSession);
 
 /**
  * Deletes the session and its transcript. Nothing on disk is touched — a

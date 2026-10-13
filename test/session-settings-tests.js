@@ -42,7 +42,7 @@ await test('sandbox: any agent requires confirmed, idle, connected state', () =>
       { status: 'running' }, { status: 'awaiting_approval' }, { connected: false },
       { settingsLoaded: false }, { sessionReady: false }, { sandboxSaving: true },
     ]) equal(canChangeSandbox({ ...state, ...override }), false);
-    equal(canChangeSandbox({ ...state, archivedAt: '2026-01-01', sandbox: false }), true);
+    equal(canChangeSandbox({ ...state, sandbox: false }), true);
   }
 });
 
@@ -298,7 +298,6 @@ await test('project sandbox network API: own scope survives reads; optional crea
     await api.createProject('/app', 'App', []);
     equal((await api.setProjectSandboxNetwork('/app', [...entries, ...entries])).sandbox_network_allowlist, entries);
     await api.setProjectSandboxNetwork('/app', []);
-    await api.setProjectArchived('/app', true);
     equal(calls, [
       { path: '/projects', method: 'GET', body: undefined },
       { path: '/projects', method: 'POST', body: { path: '/app', name: 'App', sandbox_network_allowlist: entries } },
@@ -306,7 +305,6 @@ await test('project sandbox network API: own scope survives reads; optional crea
       { path: '/projects', method: 'POST', body: { path: '/app', name: 'App', sandbox_network_allowlist: [] } },
       { path: '/projects', method: 'PATCH', body: { path: '/app', sandbox_network_allowlist: [...entries, ...entries] } },
       { path: '/projects', method: 'PATCH', body: { path: '/app', sandbox_network_allowlist: [] } },
-      { path: '/projects', method: 'PATCH', body: { path: '/app', archived: true } },
     ]);
     globalThis.fetch = async () => ({ ok: false, status: 400,
       text: async () => JSON.stringify({ detail: 'Invalid sandbox destination' }) });

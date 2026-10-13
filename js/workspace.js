@@ -41,7 +41,6 @@ export class Workspace {
     this.pane = new SessionPane(id, this.store, {
       onSettings: this.handlers.onSettings,
       onStop: this.handlers.onStop,
-      onUnarchive: this.handlers.onUnarchive,
       onError: this.handlers.onError,
       onLiveEvent: this.handlers.onLiveEvent,
       onConnected: this.handlers.onConnected,

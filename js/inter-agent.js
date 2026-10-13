@@ -6,8 +6,6 @@
  * docs/inter-agent-ui.md.
  */
 
-import { isArchived } from './archive.js';
-
 /**
  * The sender of an `input` event, or null when the user typed it.
  *
@@ -41,7 +39,7 @@ export function inputSource(event) {
 export class SessionDirectory {
   constructor() {
     this.loaded = false;
-    /** @type {Map<string, {id: string, name: string, archived: boolean}>} */
+    /** @type {Map<string, {id: string, name: string}>} */
     this.sessions = new Map();
     this.signature = '';
     this.listeners = new Set();
@@ -52,9 +50,8 @@ export class SessionDirectory {
     const entries = rows.map((row) => ({
       id: String(row.id),
       name: row.name || '',
-      archived: isArchived(row),
     }));
-    const signature = JSON.stringify(entries.map((s) => [s.id, s.name, s.archived]));
+    const signature = JSON.stringify(entries.map((s) => [s.id, s.name]));
     this.sessions = new Map(entries.map((entry) => [entry.id, entry]));
     if (this.loaded && signature === this.signature) return;
     this.loaded = true;

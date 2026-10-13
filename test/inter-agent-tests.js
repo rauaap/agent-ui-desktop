@@ -61,7 +61,7 @@ test('directory: nothing is missing until the first list arrives', () => {
   equal(directory.lookup('42'), { state: 'pending' });
   equal(sessionText(directory, '42'), '#42');
   equal(senderText({ type: 'agent', sessionId: '42' }, directory), 'session #42');
-  directory.setSessions([{ id: '1', name: 'api', archived_at: null }]);
+  directory.setSessions([{ id: '1', name: 'api' }]);
   equal(directory.lookup('42'), { state: 'missing' });
   equal(sessionText(directory, '42'), '#42 (unknown session)');
   equal(sessionText(directory, '42', 'sender'), 'session #42 (unavailable)');
@@ -79,9 +79,9 @@ test('directory: listeners hear the first list and real changes only', () => {
   directory.setSessions([{ id: 1, name: 'a', status: 'running' }]);
   equal(calls, 2);
   directory.setSessions([{ id: 1, name: 'b' }]);
-  directory.setSessions([{ id: 1, name: 'b', archived_at: '2026-09-01T00:00:00Z' }]);
-  equal(calls, 4);
-  equal(directory.lookup(1).session.archived, true);
+  directory.setSessions([{ id: 1, name: 'b', working_dir: '/former', worktree_id: null }]);
+  equal(calls, 3);
+  equal(directory.lookup(1).session, { id: '1', name: 'b' });
 });
 
 test('session tools: bare and agent_ui MCP names match; other servers do not', () => {

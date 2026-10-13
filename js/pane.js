@@ -10,7 +10,6 @@ import { httpBase } from './auth.js';
 import { getScrollback } from './api.js';
 import { TranscriptHistory } from './transcript-history.js';
 import { ImageViews, uploadImage } from './images.js';
-import { filedLabel } from './archive.js';
 import { idChip } from './clipboard.js';
 import {
   completionToken,
@@ -47,7 +46,7 @@ export class SessionPane {
   /**
    * @param {string} sessionId
    * @param {import('./store.js').Store} store
-   * @param {{onSettings: Function, onError: Function, onUnarchive: Function,
+   * @param {{onSettings: Function, onError: Function,
    *   onOpenSession: Function}} handlers
    * @param {import('./inter-agent.js').SessionDirectory} directory
    */
@@ -100,8 +99,6 @@ export class SessionPane {
     }, directory);
     this.root.appendChild(this.transcript.wrap);
     this.root.appendChild(this.transcript.queueView);
-    this.archiveNotice = this.buildArchiveNotice();
-    this.root.appendChild(this.archiveNotice);
     this.root.appendChild(this.buildComposer());
     this.setComposerValue(this.draft.saved);
     this.renderAttachments();
@@ -172,11 +169,6 @@ export class SessionPane {
     });
     head.append(this.searchBox, this.searchCount);
 
-    // Kept beside the status rather than instead of it: an archived session is
-    // still idle or still connected, and the two say different things.
-    this.archivedPill = el('span', 'pill archived', 'Archived');
-    head.appendChild(this.archivedPill);
-
     this.statusPill = el('span', 'pill');
     head.appendChild(this.statusPill);
 
@@ -197,23 +189,6 @@ export class SessionPane {
     head.appendChild(settings);
 
     return head;
-  }
-
-  /**
-   * Why the composer is closed, and the way out of it. Reading an archived
-   * session is the whole point of the archive, so the transcript above is
-   * untouched — only starting new work is refused, and the server refuses it
-   * too (`409 Session is archived`).
-   */
-  buildArchiveNotice() {
-    const notice = el('div', 'archive-notice');
-    notice.appendChild(el('span', null,
-      'This session is archived. Unarchive it to continue working in it.'));
-    const unarchive = el('button', 'btn', 'Unarchive');
-    unarchive.addEventListener('click', () => this.handlers.onUnarchive?.(this.id));
-    notice.appendChild(unarchive);
-    notice.style.display = 'none';
-    return notice;
   }
 
   buildComposer() {
@@ -610,25 +585,14 @@ export class SessionPane {
       ? 'Reconnecting…'
       : STATUS_LABEL[state.status] || state.status;
 
-    const archived = !!state.archivedAt;
-    this.archivedPill.style.display = archived ? '' : 'none';
-    this.archivedPill.title = archived ? `Archived ${filedLabel(state.archivedAt)}` : '';
-    this.archiveNotice.style.display = archived ? '' : 'none';
-
     const busy = isBusy(state.status);
-    // Connectivity closes the composer, and so does the archive — the server
-    // refuses both a prompt and a command in an archived session, and a dead
-    // box with a notice above it says that better than a rejected send. A busy
-    // agent does not: `!` commands bypass the turn entirely, and a prompt sent
-    // mid-turn is queued for the next one.
-    this.input.disabled = offline || archived;
-    this.sendButton.disabled = offline || archived
+    // Busy prompts queue for the next turn; commands bypass the turn.
+    this.input.disabled = offline;
+    this.sendButton.disabled = offline
       || this.attachments.some((item) => item.status !== 'ready');
     this.attachButton.hidden = !this.handlers.canAttachImages?.(state);
-    this.attachButton.disabled = offline || archived || this.attachments.length >= 10;
-    this.input.placeholder = archived
-      ? 'Archived — unarchive to send prompts or commands'
-      : offline
+    this.attachButton.disabled = offline || this.attachments.length >= 10;
+    this.input.placeholder = offline
         ? 'Reconnecting…'
         : state.status === 'awaiting_approval'
           ? 'Answer above — a prompt sent now waits for the next turn…'
