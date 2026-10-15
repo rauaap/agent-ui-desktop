@@ -64,6 +64,8 @@ function searchSidebar() {
     { id: '12', project_id: '2', name: 'Search backend' },
   ];
   sidebar.query = '';
+  sidebar.ageDays = null;
+  sidebar.handlers = {};
   sidebar.searchCollapsed = new Set();
   return sidebar;
 }

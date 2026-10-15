@@ -9,13 +9,14 @@
  * routes, so the grouping happens here — the same thing the Android client
  * does.
  *
- * All retained sessions appear under their project in server order.
+ * Visible retained sessions appear under their project in server order.
  */
 
 import { agentName } from './agents.js';
 import { modelLabel } from './models.js';
 import { isFormerWorktree } from './worktree.js';
 import { directoryExists } from './directory-existence.js';
+import { sessionVisible } from './session-visibility.js';
 
 const EXPANDED_KEY = 'agent-ui.expanded';
 
@@ -62,6 +63,7 @@ export class Sidebar {
     this.agents = [];
     this.activeId = null;
     this.query = '';
+    this.ageDays = null;
     this.searchCollapsed = new Set();
     this.selectedIds = new Set();
     this.selectionAnchor = null;
@@ -84,13 +86,15 @@ export class Sidebar {
   }
 
   setData(projects, sessions, worktrees = [], agents = [], directoryExistence = {}) {
+    const previousCutoff = this.ageDays;
+    if (this.handlers.onCatalog) this.ageDays = this.handlers.onCatalog(sessions);
     const metadataChanged = JSON.stringify([this.projects, [...this.worktrees.values()], this.agents, this.directoryExistence ?? {}])
       !== JSON.stringify([projects, worktrees, agents, directoryExistence]);
     this.directoryExistence = directoryExistence;
     this.projects = projects;
     this.worktrees = new Map(worktrees.map((w) => [String(w.id), w]));
     this.agents = agents;
-    if (metadataChanged) {
+    if (metadataChanged || previousCutoff !== this.ageDays) {
       this.sessions = sessions;
       this.render();
     } else {
@@ -110,7 +114,8 @@ export class Sidebar {
 
   /** Apply a poll without rebuilding the tree when only status changed. */
   setSessions(sessions) {
-    const rerender = sessionRowsChanged(this.sessions, sessions);
+    // Time alone can move a row beyond the cutoff between catalog polls.
+    const rerender = this.ageDays != null || sessionRowsChanged(this.sessions, sessions);
     this.sessions = sessions;
     if (rerender) this.render();
     else this.refreshStatuses();
@@ -168,11 +173,18 @@ export class Sidebar {
     return session.status || 'idle';
   }
 
-  /** Each project with all matching sessions. */
+  setAgeDays(days) {
+    this.ageDays = days;
+    this.render();
+  }
+
+  /** Each project with matching sessions that pass the inactivity cutoff. */
   groups() {
+    const now = Date.now();
     return this.projects.map((project) => {
       const projectMatches = (project.name || project.path).toLowerCase().includes(this.query);
       const sessions = this.sessions.filter((session) => belongsTo(session, project)
+        && sessionVisible(session, this.ageDays, this.query, now)
         && (projectMatches || (session.name || String(session.id)).toLowerCase().includes(this.query)));
       return { project, projectMatches, sessions };
     }).filter((group) => group.projectMatches || group.sessions.length);

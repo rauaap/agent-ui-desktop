@@ -17,6 +17,7 @@ import { copyText } from './clipboard.js';
 import { SessionDirectory } from './inter-agent.js';
 import { Store } from './store.js';
 import { SettingsSync, settingsMeta } from './session-settings.js';
+import { SessionVisibility } from './session-visibility.js';
 import { Sidebar, belongsTo } from './sidebar.js';
 import { Workspace } from './workspace.js';
 import { Notifier } from './notify.js';
@@ -125,6 +126,14 @@ const sidebar = new Sidebar(document.getElementById('tree'), store, {
     toast(sessions.length === 1 ? 'Session ID copied' : `${sessions.length} session IDs copied`);
   },
 });
+
+const sessionVisibility = new SessionVisibility(
+  document.getElementById('session-age-enabled'),
+  document.getElementById('session-age-slider'),
+  document.getElementById('session-age-days'),
+  (days) => sidebar.setAgeDays(days),
+);
+sidebar.handlers.onCatalog = (sessions) => sessionVisibility.updateCatalog(sessions);
 
 const sidebarSearch = document.getElementById('sidebar-search');
 sidebarSearch.addEventListener('input', () => sidebar.setQuery(sidebarSearch.value));

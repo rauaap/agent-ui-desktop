@@ -129,6 +129,92 @@ body.sidebar-resizing * { cursor: col-resize !important; user-select: none !impo
 .sidebar-search::placeholder { color: var(--faint); }
 .sidebar-search:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.session-age-control {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  padding: 0 14px 10px;
+  color: var(--muted);
+}
+.session-age-control input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+#session-age-enabled {
+  appearance: none;
+  flex: none;
+  width: 26px;
+  height: 16px;
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel-2);
+  cursor: pointer;
+  transition: background .15s;
+}
+#session-age-enabled::before {
+  content: '';
+  display: block;
+  width: 10px;
+  height: 10px;
+  margin: 2px;
+  border-radius: 50%;
+  background: var(--muted);
+  transition: transform .15s;
+}
+#session-age-enabled:checked { background: var(--accent-soft); border-color: var(--accent); }
+#session-age-enabled:checked::before { transform: translateX(10px); background: var(--accent); }
+#session-age-slider {
+  appearance: none;
+  flex: 1 1 0;
+  min-width: 0;
+  height: 5px;
+  margin: 0;
+  border-radius: 999px;
+  background: linear-gradient(to right, var(--accent) 0 var(--age-progress, 0%), var(--line) var(--age-progress, 0%) 100%);
+  cursor: pointer;
+}
+#session-age-slider::-webkit-slider-thumb {
+  appearance: none;
+  width: 13px;
+  height: 13px;
+  border: 2px solid var(--panel);
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-line);
+}
+#session-age-slider::-moz-range-thumb {
+  width: 9px;
+  height: 9px;
+  border: 2px solid var(--panel);
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-line);
+}
+#session-age-days {
+  width: 54px;
+  min-width: 0;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--ink);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.session-age-unit { font-size: 11px; }
+.session-age-control input:disabled { opacity: .45; cursor: default; }
+
 #tree {
   flex: 1;
   overflow-y: auto;

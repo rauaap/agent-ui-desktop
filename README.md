@@ -56,6 +56,11 @@ CSP intentionally allows only same-origin connections; the supported path is
   has been removed on the server. Creating a project takes a name and a
   directory; the directory tracks the name until you edit it, after which the
   two are independent.
+- **Session visibility** — a switch, slider, and linked day-count input between
+  sidebar search and the tree hide sessions inactive for more than the chosen
+  number of days. The browser remembers the setting; switching it off shows all
+  without losing the chosen cutoff. Session-name search matches remain visible
+  regardless of age. Sessions and open transcripts are not deleted or closed.
 - **Project settings** — the ⚙ on a project row opens what the server knows
   about it: directory, session count (and how many run in a worktree), last
   activity, whether it is a git repo, and its worktrees. Every whole-project

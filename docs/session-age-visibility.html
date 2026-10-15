@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Draft: session age visibility data flow</title>
+  <style>
+    :root { color-scheme: light; font-family: system-ui, sans-serif; color: #182431; background: #f5f7fa; }
+    body { max-width: 1100px; margin: 0 auto; padding: 32px 20px; }
+    h1 { margin-bottom: 8px; }
+    .draft { color: #536171; }
+    section { background: white; border: 1px solid #dce2e9; border-radius: 10px; padding: 20px; margin: 24px 0; }
+    .diagram { overflow-x: auto; }
+    code { background: #edf1f5; padding: 2px 5px; border-radius: 4px; }
+    li { margin: 8px 0; }
+  </style>
+</head>
+<body>
+  <h1>Session age visibility</h1>
+  <p class="draft">Design draft — describes proposed behavior, not an implemented feature.</p>
+
+  <section>
+    <h2>Behavior</h2>
+    <ul>
+      <li>A browser-local preference hides sessions inactive for more than <strong>N days</strong>. A sidebar toggle enables the filter; switching it off shows all while retaining the chosen N.</li>
+      <li>Age is measured from <code>last_active_at</code>, using elapsed 24-hour days.</li>
+      <li>N must be a whole number from 1 to the oldest session’s inactivity age rounded up, with a minimum maximum of 1.</li>
+      <li>A nonempty, case-insensitive search matching a <strong>session name</strong> overrides the age cutoff. A project-name match does not.</li>
+      <li>Hiding affects only the sidebar: sessions and transcripts remain on the server. An already-open transcript stays open.</li>
+      <li>There is no new API or archive state. The preference is not synchronized across browsers or clients.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Sidebar control</h2>
+    <p>Place one compact horizontal row between the sidebar search box and the sessions list, outside the scrolling project tree. The enable toggle, slider, and numeric input sit on that same row, with a “days” suffix. The slider flexes to fill available space while the number input stays compact. Explain the session-name search override in a tooltip or accessible description rather than adding another row.</p>
+    <ul>
+      <li>Moving the slider updates the number input and visible sessions immediately. A valid number edit updates the slider and applies the same cutoff.</li>
+      <li>Both controls use the same 1-to-oldest range. Invalid or temporarily empty number edits do not change the applied value; blur restores the last valid value. Enter commits a valid edit.</li>
+      <li>When off, disable the slider and input, retain N, and show all sessions. On first use, seed N with the current maximum; filtering starts disabled.</li>
+      <li>Use existing client theme tokens for surfaces, text, borders, accent fill, thumb, and focus rings—not fixed light-theme colors. Give the slider a filled progress track and the number input a compact, matching rounded border.</li>
+      <li>Provide explicit labels, keyboard operation, visible focus, and accessible minimum/maximum/current values. Preserve the number field’s in-progress edit when catalog polls update the maximum.</li>
+      <li>If the catalog-derived maximum shrinks below N, clamp the shared value and persist it. Update the range on every catalog refresh.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Catalog and preference flow</h2>
+    <div class="diagram">
+      <pre class="mermaid">
+flowchart TD
+  API["GET /sessions: complete session catalog"] --> Poll["Existing catalog polling in app.js"]
+  Poll --> Catalog["Sidebar.sessions: retain all rows"]
+  Catalog --> Maximum["Compute maximum N from last_active_at"]
+  Maximum --> Controls["Sidebar toggle, slider and number input"]
+  Memory["Shared state: enabled and N days"] --> Controls
+  Controls --> Validate["Validate whole number in range"]
+  Validate -->|invalid| Error["Keep applied value; restore field on blur"]
+  Validate -->|valid| Save["Persist enabled and N in localStorage"]
+  Save --> Apply["Synchronize both controls and render"]
+  Storage[("localStorage: session visibility preference")] --> Load["Page initialization: read preference"]
+  Load --> Memory
+  Save --> Storage
+  Apply --> Memory
+  Catalog --> Filter["Sidebar.groups: search and age filtering"]
+  Memory --> Filter
+  Query["Trimmed, lowercase sidebar query"] --> Filter
+  Clock["Current time captured once per filtering pass"] --> Filter
+  Filter --> Rows["Render visible session rows under their projects"]
+      </pre>
+    </div>
+    <p>The complete catalog determines the range, never the filtered search results. Slider, numeric input, persistence, and filtering share a single state rather than independently maintained values.</p>
+    <p>No settings-dialog change, compatibility argument, storage-error suppression, or fallback for malformed catalog timestamps is proposed. An absent preference initializes the filter as disabled.</p>
+  </section>
+
+  <section>
+    <h2>Per-session visibility decision</h2>
+    <div class="diagram">
+      <pre class="mermaid">
+flowchart TD
+  Start["Session in a project's catalog group"] --> Match{"Normal search matches?<br/>Empty query, project name/path,<br/>or session name/ID"}
+  Match -->|no| Hide["Exclude session row"]
+  Match -->|yes| Name{"Nonempty query matches session name?"}
+  Name -->|yes| Show["Include session row"]
+  Name -->|no| Enabled{"Age cutoff enabled?"}
+  Enabled -->|no| Show
+  Enabled -->|yes| Recent{"last_active_at is at or after<br/>now minus N × 24 hours?"}
+  Recent -->|yes| Show
+  Recent -->|no| Hide
+      </pre>
+    </div>
+    <p>This preserves existing search matching, but only a session-name match bypasses age filtering. Equality at the cutoff remains visible. Clearing search restores age filtering. Existing project matching and expansion behavior stay unchanged.</p>
+  </section>
+
+  <section>
+    <h2>Refresh lifecycle</h2>
+    <div class="diagram">
+      <pre class="mermaid">
+sequenceDiagram
+  actor Owner
+  participant Controls as Sidebar controls
+  participant Storage as localStorage
+  participant Sidebar
+  participant Server
+  Owner->>Controls: Enable filter and adjust slider or number
+  Controls->>Controls: Validate and synchronize shared N
+  Controls->>Storage: Persist enabled and N
+  Controls->>Sidebar: Set cutoff and render
+  Owner->>Sidebar: Enter session-name search
+  Sidebar->>Sidebar: Include matching old session
+  Owner->>Sidebar: Clear search
+  Sidebar->>Sidebar: Apply cutoff again
+  loop Existing catalog poll
+    Server-->>Sidebar: Refreshed complete session catalog
+    Sidebar->>Sidebar: Re-evaluate cutoff using current time
+  end
+      </pre>
+    </div>
+    <p>When the cutoff is enabled, every catalog poll re-evaluates visibility even if rows have not changed: elapsed time alone can hide a session. Recent activity can bring a hidden session back on the next poll. No additional timer is needed.</p>
+  </section>
+
+  <section>
+    <h2>Verification cases</h2>
+    <ul>
+      <li>Disabled initial state, toggle behavior, reload persistence, and valid range endpoints.</li>
+      <li>Slider-to-input and input-to-slider synchronization, keyboard controls, theme changes, and maximum changes after polling.</li>
+      <li>Reject fractional, zero, negative, and above-maximum values.</li>
+      <li>Exactly at cutoff versus just older than cutoff.</li>
+      <li>Old session revealed by name search, but not by project-only or ID-only search.</li>
+      <li>Clearing search hides old results again; new activity restores them.</li>
+      <li>A poll crossing the cutoff removes a row without requiring catalog changes.</li>
+      <li>Hiding an open session does not close its transcript or modify server data.</li>
+    </ul>
+  </section>
+
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({ startOnLoad: true, theme: 'default', securityLevel: 'strict' });
+  </script>
+</body>
+</html>
