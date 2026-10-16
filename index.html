@@ -18,11 +18,12 @@
         <button class="icon-btn" id="new-project-btn" title="New project">+</button>
       </div>
       <div class="session-age-control" title="Hide sessions inactive for more than this many days. Session-name search matches remain visible.">
-        <input type="checkbox" id="session-age-enabled" role="switch" aria-label="Hide inactive sessions" aria-controls="tree" aria-describedby="session-age-help">
-        <input type="range" id="session-age-slider" min="1" max="1" step="1" value="1" aria-label="Inactivity cutoff in days" aria-controls="tree" aria-describedby="session-age-help">
-        <input type="number" id="session-age-days" min="1" max="1" step="1" value="1" aria-label="Inactivity cutoff in days" aria-controls="tree" aria-describedby="session-age-help">
+        <div class="session-age-track">
+          <input type="range" id="session-age-slider" min="0" max="11" step="1" value="11" aria-label="Inactivity cutoff in days; last tick shows all sessions" aria-controls="tree" aria-describedby="session-age-help">
+        </div>
+        <input type="text" inputmode="numeric" id="session-age-days" value="∞" aria-label="Exact inactivity cutoff in days; infinity shows all sessions" aria-controls="tree" aria-describedby="session-age-help">
         <span class="session-age-unit">days</span>
-        <span id="session-age-help" class="visually-hidden">Hide sessions inactive for more than the selected number of days. Session-name search matches remain visible. Switch off to show all sessions.</span>
+        <span id="session-age-help" class="visually-hidden">Hide sessions inactive for more than the selected number of days. Slider presets are 1–7, 14, 30, 60, 90 days and infinity (all sessions). Enter any positive whole day count for an exact cutoff. Custom values position the slider at the next preset up without changing the cutoff. Tapping or dragging the slider replaces the exact value with its preset. Session-name search matches remain visible.</span>
       </div>
       <nav id="tree"></nav>
       <div

@@ -1,14 +1,8 @@
 const DAY = 86_400_000;
 const KEY = 'agent-ui.session-visibility';
 
-export function oldestSessionDays(sessions, now = Date.now()) {
-  let maximum = 1;
-  for (const session of sessions) {
-    const timestamp = Date.parse(session.last_active_at);
-    if (!Number.isFinite(timestamp)) throw new Error('Invalid session last_active_at');
-    maximum = Math.max(maximum, Math.ceil((now - timestamp) / DAY));
-  }
-  return maximum;
+export function sessionAgeStops() {
+  return [1, 2, 3, 4, 5, 6, 7, 14, 30, 60, 90, null];
 }
 
 export function sessionVisible(session, days, query, now = Date.now()) {
@@ -18,74 +12,66 @@ export function sessionVisible(session, days, query, now = Date.now()) {
 
 /** One shared state for the sidebar controls, persistence, and filtering. */
 export class SessionVisibility {
-  constructor(toggle, slider, number, onChange, storage = localStorage) {
-    this.toggle = toggle;
+  constructor(slider, number, onChange, storage = localStorage) {
     this.slider = slider;
     this.number = number;
     this.onChange = onChange;
     this.storage = storage;
     const raw = storage.getItem(KEY);
-    this.state = raw === null ? null : JSON.parse(raw);
-    if (this.state !== null && (typeof this.state.enabled !== 'boolean'
-      || !Number.isInteger(this.state.days) || this.state.days < 1)) {
+    this.state = raw === null ? { enabled: false, days: 30 } : JSON.parse(raw);
+    if (this.state === null || typeof this.state.enabled !== 'boolean'
+      || !Number.isSafeInteger(this.state.days) || this.state.days < 1) {
       throw new Error('Invalid session visibility preference');
     }
-    this.maximum = 1;
-    this.ready = false;
-    this.paint();
-    toggle.addEventListener('change', () => {
-      this.state.enabled = toggle.checked;
-      this.commit();
+    const selectStep = () => this.setDays(sessionAgeStops()[Number(slider.value)]);
+    slider.addEventListener('input', selectStep);
+    // A click on the current tick need not emit input/change. It still selects
+    // that preset, replacing an exact typed value (including 100 → infinity).
+    slider.addEventListener('click', selectStep);
+    slider.addEventListener('keyup', (event) => {
+      if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown'].includes(event.key)) {
+        selectStep();
+      }
     });
-    slider.addEventListener('input', () => this.setDays(Number(slider.value)));
     number.addEventListener('input', () => {
-      if (number.value !== '' && number.validity.valid) this.setDays(Number(number.value));
+      if (/^\d+$/.test(number.value)) this.setDays(Number(number.value), true);
+    });
+    number.addEventListener('focus', () => {
+      if (this.cutoff === null) number.value = '';
     });
     number.addEventListener('blur', () => this.paint());
     number.addEventListener('keydown', (event) => {
       if (event.key === 'Enter') {
         event.preventDefault();
-        if (number.value !== '' && number.validity.valid) this.setDays(Number(number.value));
+        if (/^\d+$/.test(number.value)) this.setDays(Number(number.value));
         this.paint();
       }
     });
-  }
-
-  get cutoff() { return this.state?.enabled ? this.state.days : null; }
-
-  updateCatalog(sessions) {
-    this.maximum = oldestSessionDays(sessions);
-    this.ready = true;
-    if (this.state === null) {
-      this.state = { enabled: false, days: this.maximum };
-    } else if (this.state.days > this.maximum) {
-      this.state.days = this.maximum;
-      this.storage.setItem(KEY, JSON.stringify(this.state));
-    }
-    this.paint(true);
-    return this.cutoff;
-  }
-
-  setDays(days) {
-    if (!Number.isInteger(days) || days < 1 || days > this.maximum) return;
-    this.state.days = days;
-    this.commit();
-  }
-
-  commit() {
-    this.storage.setItem(KEY, JSON.stringify(this.state));
     this.paint();
-    this.onChange(this.cutoff);
+  }
+
+  get cutoff() { return this.state.enabled ? this.state.days : null; }
+
+  setDays(days, preserveEdit = false) {
+    if (days !== null && (!Number.isSafeInteger(days) || days < 1)) return;
+    const changed = this.cutoff !== days;
+    this.state.enabled = days !== null;
+    if (days !== null) this.state.days = days;
+    if (changed) this.storage.setItem(KEY, JSON.stringify(this.state));
+    this.paint(preserveEdit);
+    if (changed) this.onChange(this.cutoff);
   }
 
   paint(preserveEdit = false) {
-    const days = this.state?.days ?? 1;
-    this.toggle.checked = this.state?.enabled ?? false;
-    this.toggle.disabled = !this.ready;
-    this.slider.disabled = this.number.disabled = !this.ready || !this.toggle.checked;
-    this.slider.max = this.number.max = String(this.maximum);
-    this.slider.value = String(days);
-    this.slider.style.setProperty('--age-progress', `${this.maximum === 1 ? 100 : (days - 1) / (this.maximum - 1) * 100}%`);
-    if (!preserveEdit || document.activeElement !== this.number) this.number.value = String(days);
+    const days = this.cutoff;
+    const stops = sessionAgeStops();
+    const index = stops.findIndex((stop) => stop === null || (days !== null && stop >= days));
+    const label = days === null ? 'All sessions' : `${days} days`;
+    const preset = stops[index] === null ? 'all sessions' : `${stops[index]} days`;
+    this.slider.max = String(stops.length - 1);
+    this.slider.value = String(index);
+    this.slider.setAttribute('aria-valuetext', `${label}; slider preset ${preset}`);
+    this.slider.style.setProperty('--age-progress', `${index / (stops.length - 1) * 100}%`);
+    if (!preserveEdit || document.activeElement !== this.number) this.number.value = days === null ? '∞' : String(days);
   }
 }

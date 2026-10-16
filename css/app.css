@@ -150,31 +150,26 @@ body.sidebar-resizing * { cursor: col-resize !important; user-select: none !impo
   outline: 2px solid var(--accent);
   outline-offset: 3px;
 }
-#session-age-enabled {
-  appearance: none;
-  flex: none;
-  width: 26px;
-  height: 16px;
-  margin: 0;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: var(--panel-2);
-  cursor: pointer;
-  transition: background .15s;
+.session-age-track {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  height: 24px;
 }
-#session-age-enabled::before {
+.session-age-track::before {
   content: '';
-  display: block;
-  width: 10px;
-  height: 10px;
-  margin: 2px;
-  border-radius: 50%;
-  background: var(--muted);
-  transition: transform .15s;
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  height: 9px;
+  pointer-events: none;
+  background: repeating-linear-gradient(to right, var(--muted) 0 1px, transparent 1px calc(100% / 11));
+  border-right: 1px solid var(--muted);
 }
-#session-age-enabled:checked { background: var(--accent-soft); border-color: var(--accent); }
-#session-age-enabled:checked::before { transform: translateX(10px); background: var(--accent); }
 #session-age-slider {
+  position: relative;
   appearance: none;
   flex: 1 1 0;
   min-width: 0;
@@ -202,9 +197,10 @@ body.sidebar-resizing * { cursor: col-resize !important; user-select: none !impo
   box-shadow: 0 0 0 1px var(--accent-line);
 }
 #session-age-days {
-  width: 54px;
+  width: calc(3ch + 16px);
   min-width: 0;
-  padding: 4px;
+  padding: 4px 7px;
+  text-align: center;
   border: 1px solid var(--line);
   border-radius: 6px;
   background: var(--panel);

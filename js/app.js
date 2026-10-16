@@ -128,12 +128,11 @@ const sidebar = new Sidebar(document.getElementById('tree'), store, {
 });
 
 const sessionVisibility = new SessionVisibility(
-  document.getElementById('session-age-enabled'),
   document.getElementById('session-age-slider'),
   document.getElementById('session-age-days'),
   (days) => sidebar.setAgeDays(days),
 );
-sidebar.handlers.onCatalog = (sessions) => sessionVisibility.updateCatalog(sessions);
+sidebar.setAgeDays(sessionVisibility.cutoff);
 
 const sidebarSearch = document.getElementById('sidebar-search');
 sidebarSearch.addEventListener('input', () => sidebar.setQuery(sidebarSearch.value));

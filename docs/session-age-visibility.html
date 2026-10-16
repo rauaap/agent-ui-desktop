@@ -22,9 +22,9 @@
   <section>
     <h2>Behavior</h2>
     <ul>
-      <li>A browser-local preference hides sessions inactive for more than <strong>N days</strong>. A sidebar toggle enables the filter; switching it off shows all while retaining the chosen N.</li>
+      <li>A browser-local preference hides sessions inactive for more than <strong>N days</strong>. The final slider preset, ∞, shows all sessions without a separate toggle.</li>
       <li>Age is measured from <code>last_active_at</code>, using elapsed 24-hour days.</li>
-      <li>N must be a whole number from 1 to the oldest session’s inactivity age rounded up, with a minimum maximum of 1.</li>
+      <li>N must be a positive safe integer, independent of the oldest session’s age.</li>
       <li>A nonempty, case-insensitive search matching a <strong>session name</strong> overrides the age cutoff. A project-name match does not.</li>
       <li>Hiding affects only the sidebar: sessions and transcripts remain on the server. An already-open transcript stays open.</li>
       <li>There is no new API or archive state. The preference is not synchronized across browsers or clients.</li>
@@ -33,14 +33,14 @@
 
   <section>
     <h2>Sidebar control</h2>
-    <p>Place one compact horizontal row between the sidebar search box and the sessions list, outside the scrolling project tree. The enable toggle, slider, and numeric input sit on that same row, with a “days” suffix. The slider flexes to fill available space while the number input stays compact. Explain the session-name search override in a tooltip or accessible description rather than adding another row.</p>
+    <p>Place one compact horizontal row between the sidebar search box and the sessions list, outside the scrolling project tree. The slider with unlabeled ticks and exact day-count input sit on that same row, with a “days” suffix. The slider flexes to fill available space while the number input stays compact. Explain the session-name search override in a tooltip or accessible description rather than adding another row.</p>
     <ul>
-      <li>Moving the slider updates the number input and visible sessions immediately. A valid number edit updates the slider and applies the same cutoff.</li>
-      <li>Both controls use the same 1-to-oldest range. Invalid or temporarily empty number edits do not change the applied value; blur restores the last valid value. Enter commits a valid edit.</li>
-      <li>When off, disable the slider and input, retain N, and show all sessions. On first use, seed N with the current maximum; filtering starts disabled.</li>
+      <li>The slider uses twelve evenly spaced, unlabeled ticks: 1, 2, 3, 4, 5, 6, 7, 14, 30, 60, 90 days, and ∞. Tapping or dragging it selects that preset, including when the thumb is already there. Exact typed values position the slider at the smallest preset greater than or equal to the value (20 → 30, 45 → 60, 100 → ∞) without changing the cutoff. Typing 100 displays 100; selecting the final tick displays ∞ and shows all sessions.</li>
+      <li>The text input uses a numeric keyboard hint so it can also display ∞; it accepts positive safe-integer day counts. Invalid or temporarily empty number edits do not change the applied value; blur restores the last valid value. Enter commits a valid edit.</li>
+      <li>Both controls remain enabled. The default is ∞. Focusing the input at ∞ clears it for numeric entry; leaving an empty edit restores ∞.</li>
       <li>Use existing client theme tokens for surfaces, text, borders, accent fill, thumb, and focus rings—not fixed light-theme colors. Give the slider a filled progress track and the number input a compact, matching rounded border.</li>
-      <li>Provide explicit labels, keyboard operation, visible focus, and accessible minimum/maximum/current values. Preserve the number field’s in-progress edit when catalog polls update the maximum.</li>
-      <li>If the catalog-derived maximum shrinks below N, clamp the shared value and persist it. Update the range on every catalog refresh.</li>
+      <li>Provide explicit labels, keyboard operation, visible focus, and accessible minimum/maximum/current values. Preserve the number field’s in-progress edit during refreshes.</li>
+      <li>Catalog changes never clamp the cutoff or change the fixed slider range. Existing enabled/day-count preferences retain their meaning.</li>
     </ul>
   </section>
 
@@ -51,8 +51,7 @@
 flowchart TD
   API["GET /sessions: complete session catalog"] --> Poll["Existing catalog polling in app.js"]
   Poll --> Catalog["Sidebar.sessions: retain all rows"]
-  Catalog --> Maximum["Compute maximum N from last_active_at"]
-  Maximum --> Controls["Sidebar toggle, slider and number input"]
+  Controls["Fixed-preset slider and exact day-count input"]
   Memory["Shared state: enabled and N days"] --> Controls
   Controls --> Validate["Validate whole number in range"]
   Validate -->|invalid| Error["Keep applied value; restore field on blur"]
@@ -69,7 +68,7 @@ flowchart TD
   Filter --> Rows["Render visible session rows under their projects"]
       </pre>
     </div>
-    <p>The complete catalog determines the range, never the filtered search results. Slider, numeric input, persistence, and filtering share a single state rather than independently maintained values.</p>
+    <p>The slider range is fixed and independent of the catalog or filtered search results. Slider, numeric input, persistence, and filtering share a single state rather than independently maintained values.</p>
     <p>No settings-dialog change, compatibility argument, storage-error suppression, or fallback for malformed catalog timestamps is proposed. An absent preference initializes the filter as disabled.</p>
   </section>
 
@@ -102,7 +101,7 @@ sequenceDiagram
   participant Storage as localStorage
   participant Sidebar
   participant Server
-  Owner->>Controls: Enable filter and adjust slider or number
+  Owner->>Controls: Select a slider preset or type an exact cutoff
   Controls->>Controls: Validate and synchronize shared N
   Controls->>Storage: Persist enabled and N
   Controls->>Sidebar: Set cutoff and render
@@ -122,9 +121,9 @@ sequenceDiagram
   <section>
     <h2>Verification cases</h2>
     <ul>
-      <li>Disabled initial state, toggle behavior, reload persistence, and valid range endpoints.</li>
-      <li>Slider-to-input and input-to-slider synchronization, keyboard controls, theme changes, and maximum changes after polling.</li>
-      <li>Reject fractional, zero, negative, and above-maximum values.</li>
+      <li>Infinity initial state, reload persistence, existing preference migration, and all twelve presets.</li>
+      <li>Slider-to-input and input-to-slider synchronization, keyboard controls, theme changes, and tapping the current tick after an exact edit.</li>
+      <li>Reject fractional, zero, negative, and unsafe-integer values; accept exact cutoffs above 90 days without catalog clamping.</li>
       <li>Exactly at cutoff versus just older than cutoff.</li>
       <li>Old session revealed by name search, but not by project-only or ID-only search.</li>
       <li>Clearing search hides old results again; new activity restores them.</li>
