@@ -708,6 +708,21 @@ body.sidebar-resizing * { cursor: col-resize !important; user-select: none !impo
   overflow-wrap: anywhere;
 }
 
+/* A flow-layout footer keeps IDs clear of text, images and card controls,
+ * including collapsed tools. Never hide it behind hover-only copy buttons. */
+.event-id-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 4px;
+  white-space: normal;
+  line-height: 1.4;
+}
+
+.card > .event-id-footer,
+.bash-card > .event-id-footer { padding: 4px 12px 6px; }
+
+.event-id-footer .id-chip { font-size: 11px; }
+
 /* agent output */
 .msg-agent { position: relative; }
 

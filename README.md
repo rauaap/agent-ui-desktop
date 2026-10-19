@@ -581,6 +581,7 @@ node test/shared-assets-tests.js  # shared assets dialogs and server-relative Ma
 node test/shared-assets-api-tests.js  # shared asset CRUD transport
 node test/scroll-follow-tests.js  # user navigation vs incidental scrolling
 node test/transcript-history-tests.js  # backward pagination, deduplication and stale responses
+node test/event-id-tests.js  # event-card ID placement, copying and streaming metadata
 ```
 
 or open `test/index.html` in a browser, which needs nothing installed at all.

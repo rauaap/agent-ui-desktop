@@ -7,7 +7,7 @@
  * transcript smooth without a virtual DOM.
  */
 
-import { copyText } from '../clipboard.js';
+import { copyText, idChip } from '../clipboard.js';
 import { ImageViews } from '../images.js';
 import { bashOutputText, bashStatus, rowText } from '../store.js';
 import {
@@ -172,6 +172,7 @@ export class TranscriptView {
             const md = existing.querySelector('.md');
             if (md) {
               md.innerHTML = toHtml(change.row.text, this.handlers.serverBase);
+              existing.transcriptEventIds = change.row.eventIds;
               this.applyQueryTo(existing, change.row);
               touched = true;
               break;
@@ -425,8 +426,21 @@ export class TranscriptView {
     if (row.kind === 'user') this.images.append(node.querySelector('.msg-user') || node, row.images);
     node.dataset.key = String(row.key);
     node.transcriptEventIds = row.eventIds;
+    this.appendEventId(node, row);
     if (this.query) this.applyQueryTo(node, row);
     return node;
+  }
+
+  /** Merged cards identify their first event, matching the Android transcript. */
+  appendEventId(node, row) {
+    const id = row.eventIds?.[0];
+    if (!(id > 0)) return;
+    const footer = el('div', 'event-id-footer');
+    const chip = idChip(id, 'event');
+    chip.setAttribute('aria-label', `Event ID ${id}, click to copy`);
+    footer.appendChild(chip);
+    // User rows span the column; the ID belongs inside the actual bubble.
+    (node.querySelector('.msg-user') || node).appendChild(footer);
   }
 
   buildUser(row) {
@@ -811,6 +825,8 @@ function highlight(node, query) {
   const targets = [];
   while (walker.nextNode()) {
     const current = walker.currentNode;
+    // Event metadata is not searchable transcript content.
+    if (current.parentElement?.closest('.event-id-footer')) continue;
     if (current.nodeValue.toLowerCase().includes(needle)) targets.push(current);
   }
 
