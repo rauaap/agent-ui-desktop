@@ -398,7 +398,7 @@ export function sharedAssetsDialog(roots, open, projectName = null) {
   });
 }
 
-export function sharedAssetEditorDialog(root, save) {
+export function sharedAssetEditorDialog(root, save, projectPath = '') {
   let name;
   let path;
   return show({
@@ -408,7 +408,7 @@ export function sharedAssetEditorDialog(root, save) {
       name = field(body, 'URL identifier', root?.asset_root || '', {
         mono: true, hint: 'ASCII letters, digits, underscores and hyphens only. Renaming breaks existing links.',
       });
-      path = field(body, 'Absolute server directory', root?.path || '', {
+      path = field(body, 'Absolute server directory', root ? root.path : projectPath, {
         mono: true, hint: 'The directory need not exist. No ~ or environment-variable expansion.',
       });
     },

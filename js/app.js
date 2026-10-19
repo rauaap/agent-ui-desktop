@@ -792,7 +792,7 @@ async function openSharedAssets(project = null) {
       } else {
         await sharedAssetEditorDialog(result.root, (values) => result.action === 'create'
           ? api.createSharedAssetRoot({ ...values, project_id: project?.id ?? null })
-          : api.updateSharedAssetRoot(result.root.asset_root, values));
+          : api.updateSharedAssetRoot(result.root.asset_root, values), project?.path ?? '');
       }
     }
   } catch (error) {

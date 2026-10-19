@@ -43,7 +43,8 @@ try {
     calls.push(value);
     if (reject) throw new Error('Identifier already registered');
     return { ...root, ...value };
-  });
+  }, '/project');
+  assert.equal(inputs()[1].value, '/notes', 'Existing roots retain their saved path');
   inputs()[0].value = 'bad name';
   await button('Save').emit('click');
   assert.equal(calls.length, 0);
@@ -65,8 +66,16 @@ try {
   const empty = sharedAssetsDialog([], () => {});
   await button('+  Register directory…').emit('click');
   assert.deepEqual(await empty, { action: 'create' });
+  const projectEditor = sharedAssetEditorDialog(null, (value) => value, '/project');
+  assert.equal(inputs()[1].value, '/project', 'New project roots default to the project path');
+  inputs()[0].value = 'project-assets';
+  inputs()[1].value += '/assets';
+  await button('Save').emit('click');
+  assert.deepEqual(await projectEditor, { asset_root: 'project-assets', path: '/project/assets' });
+
   let saved = false;
   const cancelled = sharedAssetEditorDialog(null, () => { saved = true; });
+  assert.equal(inputs()[1].value, '', 'New server-wide roots remain blank');
   await button('Cancel').emit('click');
   assert.equal(await cancelled, null);
   assert.equal(saved, false);
