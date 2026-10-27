@@ -7,6 +7,12 @@
  * preserve), but a *re*connect buffers into a shadow state and swaps it in only
  * once complete, so a slow reconnect never blanks a transcript you are reading.
  * Ported from SessionActivity.java:90-96 and commitReplay().
+ *
+ * Between the replay and the status, the server sends one `stream_snapshot` of
+ * the drafts being generated, so a buffered reconnect commits with them. A
+ * stream frame the store cannot apply in order means this client's drafts have
+ * diverged from the server's; the socket then reconnects for authoritative
+ * history and a fresh snapshot rather than guessing.
  */
 
 import { authenticatedSocket, authBlocked } from './auth.js';
@@ -40,6 +46,8 @@ export class SessionSocket {
     // Every connection starts with a scrollback replay terminated by a status
     // event. Until that arrives, what we are seeing is history, not news.
     this.replayPending = true;
+    // Consecutive resynchronizations, for backing off one that recurs.
+    this.desyncs = 0;
   }
 
   open() {
@@ -87,7 +95,11 @@ export class SessionSocket {
         }
       }
       this.everReceived = true;
-      this.store.apply(this.id, event);
+      if (!this.store.apply(this.id, event)) {
+        this.resync(socket);
+        return;
+      }
+      if (event.type === 'stream_delta' && !this.replayPending) this.desyncs = 0;
       if (event.type === 'status') this.store.setMeta(this.id, { sessionReady: true });
       if (!this.replayPending || event.type === 'settings') this.onLiveEvent?.(event);
     };
@@ -104,6 +116,28 @@ export class SessionSocket {
     socket.onerror = () => {
       // onclose always follows; reconnect is handled there.
     };
+  }
+
+  /**
+   * Drop a connection whose drafts can no longer be trusted. Nothing more from
+   * it is applied; reconnecting replays history and the server's snapshot.
+   */
+  resync(socket) {
+    if (this.socket !== socket) return;
+    this.socket = null;
+    socket.onclose = null;
+    socket.onerror = null;
+    socket.onmessage = null;
+    socket.close(4000, 'stream resync');
+    this.finishReplay();
+    this.store.setConnected(this.id, false);
+    this.clearTimer();
+    const delay = this.desyncs ? Math.min(BASE_DELAY * 2 ** (this.desyncs - 1), MAX_DELAY) : 0;
+    this.desyncs += 1;
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      this.open();
+    }, delay);
   }
 
   /** Send a prompt, starting a turn. */

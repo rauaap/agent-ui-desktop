@@ -979,6 +979,27 @@ body.sidebar-resizing * { cursor: col-resize !important; user-select: none !impo
 .action-copy:hover { color: var(--accent-strong); background: var(--panel-hover); }
 .protocol-fallback .card-head .tool { color: var(--muted); }
 
+/* model output still being generated, or cut off before it completed --- */
+
+.draft-tag {
+  flex: none;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  padding: 0 7px;
+  border-radius: 999px;
+  color: var(--faint);
+  border: 1px solid var(--line);
+}
+
+.msg-agent > .draft-tag { display: inline-block; margin-bottom: 4px; }
+.card.draft { border-style: dashed; }
+.card.draft .card-head:hover,
+.card.interrupted .card-head:hover { background: none; }
+.interrupted-tag { color: var(--danger); border-color: var(--danger-line); }
+.card.interrupted { border-color: var(--danger-line); }
+.msg-agent.interrupted .md { color: var(--muted); }
+
 /* approvals -------------------------------------------------------- */
 
 .approval-bar {

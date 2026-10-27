@@ -1427,5 +1427,6 @@ results.push(...(await import('./usage-tests.js')).results);
 results.push(...(await import('./inter-agent-tests.js')).results);
 results.push(...(await import('./model-tests.js')).results);
 results.push(...(await import('./queue-tests.js')).results);
+results.push(...(await import('./streaming-tests.js')).results);
 
 export { results };

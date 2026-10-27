@@ -14,13 +14,18 @@
  *   - an accepted `input` waits in a pending queue, outside the transcript,
  *     until `inputs_shipped` moves it in at the turn boundary
  *   - anything else that isn't `output` closes the open agent message
+ *   - generation in progress lives in `drafts`, never in rows or history: the
+ *     transient `stream_*` frames edit it, and the final `output`, `tool_use`
+ *     or `stream_interrupted` retires it (docs/model-streaming.md)
  *
  * Keeping it DOM-free means it can be exercised headlessly (see test/), and it
  * gives the renderer a single job: mirror rows into elements.
  */
 
 import { inputSource, senderText, sessionText } from './inter-agent.js';
-import { actionLabel, actionSummary, isCanonicalAction, prettyJson } from './tools.js';
+import {
+  actionLabel, actionSummary, draftPreview, isCanonicalAction, prettyJson,
+} from './tools.js';
 import { isFormerWorktree } from './worktree.js';
 
 /**
@@ -134,6 +139,10 @@ function blankState(id) {
     // re-record history for an acceptance already seen, nor append twice.
     acceptedIds: new Set(),
     shippedIds: new Set(),
+    // Active generation, keyed by stream ID in source order. Transient: never
+    // in `rows`, `history` or the replay log, and replaced whole by the
+    // `stream_snapshot` every connection sends.
+    drafts: new Map(),
   };
 }
 
@@ -275,8 +284,20 @@ export class Store {
   /* the reducer                                                      */
   /* ---------------------------------------------------------------- */
 
-  /** Apply one server event, notifying subscribers of what changed. */
+  /**
+   * Apply one server event, notifying subscribers of what changed. Returns
+   * false when a stream frame shows this client lost synchronization with the
+   * server's drafts; the caller must reconnect for an authoritative snapshot.
+   */
   apply(id, event) {
+    // Transient frames edit drafts only. They bypass history recording, so no
+    // delta is ever replayed by a rebuild.
+    if (STREAM_FRAMES.has(event?.type)) {
+      const replaying = this.replays.get(id);
+      const result = applyStream(replaying ?? this.session(id), event);
+      if (!replaying) this.emit(id, result.changes);
+      return !result.desync;
+    }
     // Settings and reasoning levels are never replayed history. Apply
     // immediately to both copies so a dropped replay cannot lose a live update.
     if (event.type === 'settings' || event.type === 'reasoning_level') {
@@ -284,13 +305,14 @@ export class Store {
       const shadow = this.replays.get(id);
       if (shadow) applyEvent(shadow, event);
       this.emit(id, changes);
-      return;
+      return true;
     }
     const replaying = this.replays.get(id);
     const state = replaying ?? this.session(id);
     const changes = applyEvent(state, event);
     // A buffered replay is invisible until it commits, so nothing to emit.
     if (!replaying) this.emit(id, changes);
+    return true;
   }
 
   /** Re-run chronological history so fragments and resolutions cross page boundaries. */
@@ -311,7 +333,8 @@ export class Store {
     rebuilt.nextKey = live.nextKey;
     for (const event of history.events) reduce(rebuilt, event);
     // Only transcript-owned fields are historical. Keep live settings, status,
-    // connectivity and location metadata authoritative.
+    // connectivity and location metadata authoritative, and live drafts: they
+    // are newer than any page, and the rebuild retired none of them.
     for (const key of ['rows', 'nextKey', 'openBubble', 'pendingApprovalId',
       'pendingQuestionId', 'queue', 'acceptedIds', 'shippedIds']) live[key] = rebuilt[key];
     this.emit(id, [{ op: 'prepend' }]);
@@ -334,11 +357,24 @@ function newRow(state, row) {
   return row;
 }
 
-/** `extra` annotates the change itself, e.g. `history: false` for the pane. */
+/**
+ * `extra` annotates the change itself, e.g. `history: false` for the pane.
+ *
+ * Generated blocks keep their turn's source order even when they complete out
+ * of order: a row with a `source` goes before the first row of the same turn
+ * with a later ordinal, and the change names that row as `before`. History
+ * replays in completion order through the same rule, so it agrees with live.
+ */
 function append(state, row, changes, extra = null) {
   newRow(state, row);
-  state.rows.push(row);
-  changes.push({ op: 'append', row, ...extra });
+  const index = row.source ? state.rows.findIndex((r) => follows(r.source, row.source)) : -1;
+  if (index >= 0) {
+    changes.push({ op: 'append', row, before: state.rows[index].key, ...extra });
+    state.rows.splice(index, 0, row);
+  } else {
+    state.rows.push(row);
+    changes.push({ op: 'append', row, ...extra });
+  }
   // Trim from the front once past the cap, so a very long session cannot grow
   // the transcript without bound.
   while (!state.history?.expanded && state.rows.length > MAX_ROWS) {
@@ -380,6 +416,139 @@ function validApprovalRequest(event) {
       && typeof option.name === 'string' && option.name.length > 0
       && APPROVAL_KINDS.has(option.kind))
     && (event.auto_approved === undefined || event.auto_approved === true);
+}
+
+/* ------------------------------------------------------------------ */
+/* model output streaming                                             */
+/* ------------------------------------------------------------------ */
+
+const STREAM_FRAMES = new Set(['stream_start', 'stream_delta', 'stream_snapshot', 'stream_remove']);
+const INTERRUPT_REASONS = new Set(['cancelled', 'error', 'retry', 'incomplete']);
+const plainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+const nonEmptyText = (value) => typeof value === 'string' && value.length > 0;
+const count = (value) => Number.isInteger(value) && value >= 0;
+
+/**
+ * The client's model of one wire draft, or null when malformed. Tool previews
+ * are provisional display data: they never pass through `isCanonicalAction`.
+ */
+export function parseDraft(wire) {
+  if (!plainObject(wire) || !nonEmptyText(wire.stream_id) || !nonEmptyText(wire.turn_id)
+    || !count(wire.ordinal) || !count(wire.revision)) return null;
+  const draft = {
+    streamId: wire.stream_id,
+    turnId: wire.turn_id,
+    ordinal: wire.ordinal,
+    revision: wire.revision,
+    kind: wire.kind,
+  };
+  if (wire.kind === 'text') {
+    if (typeof wire.text !== 'string') return null;
+    return { ...draft, text: wire.text };
+  }
+  if (wire.kind === 'tool') {
+    if (!nonEmptyText(wire.call_id) || !nonEmptyText(wire.name)
+      || typeof wire.arguments_json !== 'string' || !plainObject(wire.arguments_preview)) return null;
+    return {
+      ...draft,
+      callId: wire.call_id,
+      name: wire.name,
+      argumentsJson: wire.arguments_json,
+      argumentsPreview: wire.arguments_preview,
+    };
+  }
+  return null;
+}
+
+/** Where a generated block sits in its turn, or null without valid metadata. */
+const sourceOf = (turnId, ordinal) => (nonEmptyText(turnId) && count(ordinal)
+  ? { turnId, ordinal } : null);
+
+/** Whether `later` comes after `earlier` in the same turn's source order. */
+export const follows = (later, earlier) => !!later && !!earlier
+  && later.turnId === earlier.turnId && later.ordinal > earlier.ordinal;
+
+/** Optional streaming metadata on final events: absent, or well-typed. */
+const validStreamMeta = (event) => (event.stream_id === undefined || nonEmptyText(event.stream_id))
+  && (event.turn_id === undefined || nonEmptyText(event.turn_id))
+  && (event.ordinal === undefined || count(event.ordinal));
+const STREAM_META = ['stream_id', 'turn_id', 'ordinal'];
+
+/** Retire the draft a durable event finalizes. Final events stand alone without one. */
+function retireDraft(state, streamId, changes) {
+  if (typeof streamId !== 'string' || !state.drafts?.delete(streamId)) return;
+  changes.push({ op: 'draft-remove', streamId });
+}
+
+/**
+ * Apply a transient stream frame to `state.drafts`. Duplicate or older
+ * revisions are ignored. A gap, an update for an unknown draft or a malformed
+ * frame is a desynchronization: nothing is guessed, and the caller reconnects
+ * for authoritative history and a fresh snapshot. Exported for tests.
+ *
+ * @returns {{changes: object[], desync: boolean}}
+ */
+export function applyStream(state, event) {
+  const changes = [];
+  const desync = { changes, desync: true };
+  switch (event.type) {
+    case 'stream_start': {
+      const draft = parseDraft(event.draft);
+      if (!draft) return desync;
+      const existing = state.drafts.get(draft.streamId);
+      if (existing) return draft.revision <= existing.revision ? { changes, desync: false } : desync;
+      state.drafts.set(draft.streamId, draft);
+      changes.push({ op: 'draft', draft });
+      break;
+    }
+    case 'stream_delta': {
+      if (!nonEmptyText(event.stream_id) || !count(event.revision) || typeof event.delta !== 'string'
+        || (event.arguments_preview !== undefined && !plainObject(event.arguments_preview))) return desync;
+      const draft = state.drafts.get(event.stream_id);
+      if (!draft) return desync;
+      if (event.revision <= draft.revision) break;
+      if (event.revision !== draft.revision + 1) return desync;
+      draft.revision = event.revision;
+      if (draft.kind === 'text') {
+        draft.text += event.delta;
+      } else {
+        draft.argumentsJson += event.delta;
+        // A replacement, not a merge: incomplete fields may vanish or change type.
+        if (event.arguments_preview) draft.argumentsPreview = event.arguments_preview;
+      }
+      changes.push({ op: 'draft', draft });
+      break;
+    }
+    case 'stream_snapshot': {
+      if (!Array.isArray(event.drafts)) return desync;
+      const drafts = new Map();
+      for (const wire of event.drafts) {
+        const draft = parseDraft(wire);
+        if (!draft || drafts.has(draft.streamId)) return desync;
+        drafts.set(draft.streamId, draft);
+      }
+      // Replaces the collection: drafts absent here finished or vanished.
+      state.drafts = drafts;
+      changes.push({ op: 'drafts' });
+      break;
+    }
+    case 'stream_remove':
+      if (!nonEmptyText(event.stream_id)) return desync;
+      retireDraft(state, event.stream_id, changes);
+      break;
+    default:
+      break;
+  }
+  return { changes, desync: false };
+}
+
+/** An interrupted entry's draft and reason, or null when malformed. */
+function parseInterrupted(event) {
+  if (!exactEventKeys(event, ['type', 'draft', 'reason']) || !INTERRUPT_REASONS.has(event.reason)) {
+    return null;
+  }
+  const draft = parseDraft(event.draft);
+  return draft && { draft, reason: event.reason };
 }
 
 /**
@@ -497,8 +666,16 @@ export function reduce(state, event) {
     }
 
     case 'output': {
+      // The final block replaces its draft. A generated block is a whole
+      // message with its own identity and place in the turn, so it neither
+      // absorbs nor is absorbed by other output. Unidentified chunks coalesce.
+      retireDraft(state, event.stream_id, changes);
       const text = event.text ?? '';
-      if (state.openBubble) {
+      const source = nonEmptyText(event.stream_id) ? sourceOf(event.turn_id, event.ordinal) : null;
+      if (source) {
+        state.openBubble = null;
+        append(state, { kind: 'agent', text, source }, changes);
+      } else if (state.openBubble) {
         state.openBubble.text += text;
         changes.push({ op: 'update', row: state.openBubble });
       } else {
@@ -509,15 +686,20 @@ export function reduce(state, event) {
 
     case 'tool_use': {
       state.openBubble = null;
-      const canonical = exactEventKeys(event, ['type', 'call_id', 'action'])
+      retireDraft(state, event.stream_id, changes);
+      const canonical = exactEventKeys(event, ['type', 'call_id', 'action'], STREAM_META)
         && typeof event.call_id === 'string' && event.call_id.length > 0
+        && validStreamMeta(event)
         && isCanonicalAction(event.action);
+      // A question already correlated with this call is its single card.
+      if (canonical && findRow(state, (r) => r.kind === 'question' && r.callId === event.call_id)) break;
       append(state, {
         kind: 'tool',
         callId: canonical ? event.call_id : null,
         action: canonical ? event.action : null,
         rawEvent: canonical ? null : event,
         legacy: !Object.hasOwn(event, 'action'),
+        source: sourceOf(event.turn_id, event.ordinal),
       }, changes);
       break;
     }
@@ -549,6 +731,8 @@ export function reduce(state, event) {
         : -1;
       if (index >= 0) {
         row.key = state.rows[index].key;
+        // The request takes over the card's place in its turn too.
+        row.source = state.rows[index].source;
         state.rows[index] = row;
         changes.push({ op: 'update', row });
       } else {
@@ -572,13 +756,41 @@ export function reduce(state, event) {
 
     case 'question': {
       state.openBubble = null;
-      const row = append(state, {
+      const callId = nonEmptyText(event.call_id) ? event.call_id : null;
+      const row = {
         kind: 'question',
         id: event.request_id ?? '',
+        callId,
         questions: Array.isArray(event.questions) ? event.questions : [],
         resolved: null,
-      }, changes);
+      };
+      // The question tool's completed card and its request are one card: the
+      // request takes the card's key and slot, as an approval does. Controls
+      // come only from this request, never from the tool's arguments.
+      const index = callId === null ? -1
+        : state.rows.findLastIndex((r) => r.kind === 'tool' && r.callId === callId);
+      if (index >= 0) {
+        row.key = state.rows[index].key;
+        // The request takes over the card's place in its turn too.
+        row.source = state.rows[index].source;
+        state.rows[index] = row;
+        changes.push({ op: 'update', row });
+      } else {
+        append(state, row, changes);
+      }
       state.pendingQuestionId = row.id;
+      break;
+    }
+
+    // Generation that stopped before completing: kept visible, never actionable.
+    case 'stream_interrupted': {
+      state.openBubble = null;
+      const parsed = parseInterrupted(event);
+      retireDraft(state, parsed?.draft.streamId ?? event.draft?.stream_id, changes);
+      append(state, parsed
+        ? { kind: 'interrupted', draft: parsed.draft, reason: parsed.reason,
+          source: sourceOf(parsed.draft.turnId, parsed.draft.ordinal) }
+        : { kind: 'interrupted', draft: null, reason: null, rawEvent: event }, changes);
       break;
     }
 
@@ -701,10 +913,27 @@ export function rowText(row, directory = null) {
       return `${row.command} ${bashOutputText(row.result)}`;
     case 'error':
       return row.message;
+    case 'interrupted':
+      return draftText(row.draft) ?? prettyJson(row.rawEvent);
     default:
       return '';
   }
 }
+
+/** A draft's searchable text, or null when there is no draft. */
+export function draftText(draft) {
+  if (!draft) return null;
+  if (draft.kind === 'text') return draft.text;
+  const preview = draftPreview(draft);
+  return `${preview.label} ${preview.summary} ${prettyJson(draft.argumentsPreview)}`;
+}
+
+export const INTERRUPT_LABELS = {
+  cancelled: 'stopped',
+  error: 'failed',
+  retry: 'abandoned for a retry',
+  incomplete: 'incomplete',
+};
 
 /** Serialize a session's transcript to markdown, for export. */
 export function toMarkdown(state, directory = null) {
@@ -775,6 +1004,18 @@ export function toMarkdown(state, directory = null) {
       }
       case 'error':
         parts.push(`> **Error:** ${row.message}`, '');
+        break;
+      case 'interrupted':
+        if (!row.draft) {
+          parts.push('**Malformed interrupted event**', '');
+          parts.push('```json', JSON.stringify(row.rawEvent, null, 2), '```', '');
+        } else if (row.draft.kind === 'text') {
+          parts.push(`### Agent (interrupted: ${INTERRUPT_LABELS[row.reason]})`, '', row.draft.text, '');
+        } else {
+          const preview = draftPreview(row.draft);
+          parts.push(`**${preview.label}** (interrupted: ${INTERRUPT_LABELS[row.reason]}, not run)`, '');
+          parts.push('```json', JSON.stringify(row.draft.argumentsPreview, null, 2), '```', '');
+        }
         break;
       default:
         break;

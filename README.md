@@ -128,6 +128,14 @@ CSP intentionally allows only same-origin connections; the supported path is
   tool cards with git-style diffs and terminal-style command blocks, inline
   approval prompts (including the agent's own multiple-choice options and a
   free-form denial reason), and AskUserQuestion cards.
+- **Model output streaming** — assistant text and tool-call arguments appear
+  as they are generated. Text grows as Markdown. A tool call grows as a
+  read-only card, including the message an inter-agent tool is composing.
+  The completed event replaces the draft in place. A question tool's card and
+  its question are one card; only explicit approval and question requests
+  offer controls. Generation cut off by a stop, an error or a retry stays
+  visible, labelled interrupted. Reconnects restore drafts from the server's
+  snapshot. See [docs/model-streaming.md](docs/model-streaming.md).
 - **Auto-approve** — per-session toggles for writes and shell commands.
   Auto-approved tools still appear in the transcript, marked as such.
 - **Sandbox** — supported for Pi and Claude Code, enabled by default in the
@@ -582,6 +590,7 @@ node test/shared-assets-api-tests.js  # shared asset CRUD transport
 node test/scroll-follow-tests.js  # user navigation vs incidental scrolling
 node test/transcript-history-tests.js  # backward pagination, deduplication and stale responses
 node test/event-id-tests.js  # event-card ID placement, copying and streaming metadata
+node test/streaming-view-tests.js  # draft rendering, frame batching, retirement and interrupted cards
 ```
 
 or open `test/index.html` in a browser, which needs nothing installed at all.

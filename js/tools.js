@@ -197,6 +197,45 @@ export function actionSummary(action, nameSession = (id) => `#${id}`) {
   }
 }
 
+const MCP_PREFIX = /^mcp__.+?__/;
+const textOrNull = (value) => (typeof value === 'string' ? value : null);
+
+/**
+ * How to show a tool call that is still being generated, or that was
+ * interrupted. Its `argumentsPreview` is a provisional partial snapshot, not
+ * a canonical action: fields can be missing, partial, or change type between
+ * updates, so this reads only what is already a string and never validates.
+ * Nothing derived from it may drive a control.
+ *
+ * @returns {{label: string, sessionTool: string | null, target: string | null,
+ *   summary: string, body: string | null}} `target` is a session ID once the
+ *   arguments name a valid one; `body` is the long text worth watching grow.
+ */
+export function draftPreview(draft) {
+  const args = object(draft.argumentsPreview) ? draft.argumentsPreview : {};
+  const tool = sessionToolName({ kind: 'other', name: draft.name });
+  if (tool) {
+    return {
+      label: tool.replace(/_/g, ' ').toUpperCase(),
+      sessionTool: tool,
+      target: sessionId(args.session_id),
+      summary: '',
+      body: textOrNull(args.message),
+    };
+  }
+  const command = textOrNull(args.command);
+  const path = textOrNull(args.file_path) ?? textOrNull(args.path) ?? textOrNull(args.notebook_path);
+  const content = textOrNull(args.content) ?? textOrNull(args.new_string)
+    ?? textOrNull(args.newText) ?? textOrNull(args.new_text);
+  return {
+    label: draft.name.replace(MCP_PREFIX, '').replace(/_/g, ' ').toUpperCase(),
+    sessionTool: null,
+    target: null,
+    summary: command?.split('\n')[0] ?? path ?? '',
+    body: content ?? command,
+  };
+}
+
 export function approvalResponsePayload(requestId, behavior, optionId, message) {
   const payload = { type: 'approval_response', request_id: requestId };
   // Named choices and generic Allow/Deny controls are distinct wire forms.

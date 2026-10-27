@@ -5,13 +5,18 @@
  * state, so a streaming turn touches exactly one node — the trailing agent
  * message — instead of re-rendering the conversation. That is what keeps a long
  * transcript smooth without a virtual DOM.
+ *
+ * Drafts — model output still being generated — sit in their turn's source
+ * order: before the first row of the same turn with a later ordinal, else
+ * after every row. They are redrawn at most once per animation frame however
+ * many deltas arrive, and retired synchronously when the final event lands.
  */
 
 import { copyText, idChip } from '../clipboard.js';
 import { ImageViews } from '../images.js';
-import { bashOutputText, bashStatus, rowText } from '../store.js';
+import { INTERRUPT_LABELS, bashOutputText, bashStatus, follows, rowText } from '../store.js';
 import {
-  actionLabel, actionSummary, prettyJson, sessionToolName, sessionToolParts,
+  actionLabel, actionSummary, draftPreview, prettyJson, sessionToolName, sessionToolParts,
 } from '../tools.js';
 import { toHtml } from './markdown.js';
 import { toolBody } from './toolformat.js';
@@ -19,6 +24,11 @@ import { ScrollFollow } from './scroll-follow.js';
 
 /** Allow for fractional layout coordinates when deciding whether we are at the end. */
 const BOTTOM_EPSILON = 1;
+
+const nextFrame = (fn) => (globalThis.requestAnimationFrame
+  ? globalThis.requestAnimationFrame(fn) : setTimeout(fn, 16));
+const cancelFrame = (handle) => (globalThis.cancelAnimationFrame
+  ? globalThis.cancelAnimationFrame(handle) : clearTimeout(handle));
 
 const el = (tag, className, text) => {
   const node = document.createElement(tag);
@@ -42,6 +52,11 @@ export class TranscriptView {
     this.directory = directory;
     /** @type {Map<number, HTMLElement>} row key -> element */
     this.nodes = new Map();
+    /** @type {Map<string, object>} stream ID -> draft view, in DOM order */
+    this.draftViews = new Map();
+    /** Stream IDs whose content changed since the last drawn frame. */
+    this.dirtyDrafts = new Set();
+    this.draftFrame = null;
     this.images = new ImageViews(() => {
       if (this.followBottom) this.scrollToBottom();
     });
@@ -101,6 +116,7 @@ export class TranscriptView {
   }
 
   destroy() {
+    this.cancelDraftFrame();
     this.images.dispose();
     this.resizeObserver.disconnect();
     this.scrolling.destroy();
@@ -122,6 +138,7 @@ export class TranscriptView {
     const wasAtBottom = this.followBottom;
     const previousScrollTop = this.list.scrollTop;
     let touched = false;
+    let placeDrafts = false;
 
     for (const change of changes) {
       switch (change.op) {
@@ -159,10 +176,39 @@ export class TranscriptView {
         case 'append': {
           const node = this.build(change.row);
           this.nodes.set(change.row.key, node);
-          this.list.appendChild(node);
+          this.list.insertBefore(node, this.rowSuccessor(change));
           touched = true;
+          placeDrafts = true;
           break;
         }
+        case 'draft': {
+          const view = this.draftViews.get(change.draft.streamId);
+          if (view) {
+            this.dirtyDrafts.add(change.draft.streamId);
+            this.scheduleDraftFrame();
+            break;
+          }
+          const created = this.buildDraft(change.draft);
+          this.draftViews.set(change.draft.streamId, created);
+          touched = true;
+          placeDrafts = true;
+          break;
+        }
+        case 'draft-remove': {
+          // Synchronous, so a final row never appears beside its own draft.
+          const view = this.draftViews.get(change.streamId);
+          this.dirtyDrafts.delete(change.streamId);
+          if (view) {
+            view.node.remove();
+            this.draftViews.delete(change.streamId);
+            touched = true;
+          }
+          break;
+        }
+        case 'drafts':
+          this.renderDrafts();
+          touched = true;
+          break;
         case 'update': {
           const existing = this.nodes.get(change.row.key);
           if (!existing) break;
@@ -200,8 +246,50 @@ export class TranscriptView {
       }
     }
 
+    if (placeDrafts) this.placeDrafts();
     if (touched) this.restoreScroll(wasAtBottom, previousScrollTop);
     else this.updateScrollButton();
+  }
+
+  /**
+   * The node a new row goes before: the row the store placed it ahead of, or
+   * else whatever follows the previous row. Drafts are re-placed afterwards.
+   */
+  rowSuccessor(change) {
+    if (change.before !== undefined) {
+      const next = this.nodes.get(change.before);
+      if (next) return next;
+    }
+    const rows = this.store.session(this.sessionId).rows;
+    const previous = this.nodes.get(rows[rows.indexOf(change.row) - 1]?.key);
+    return previous ? previous.nextSibling : this.list.firstChild;
+  }
+
+  /**
+   * Put each draft before the first row that follows it in its turn, or after
+   * every row. A node already in place is not moved, so a selection inside a
+   * growing draft survives unrelated rows arriving.
+   */
+  placeDrafts() {
+    if (!this.draftViews.size) return;
+    const { rows, drafts } = this.store.session(this.sessionId);
+    /** @type {Map<HTMLElement | null, HTMLElement[]>} successor -> drafts, in source order */
+    const groups = new Map();
+    for (const [streamId, view] of this.draftViews) {
+      const draft = drafts.get(streamId);
+      const next = draft && rows.find((row) => follows(row.source, draft));
+      const successor = (next && this.nodes.get(next.key)) || null;
+      if (!groups.has(successor)) groups.set(successor, []);
+      groups.get(successor).push(view.node);
+    }
+    for (const [successor, nodes] of groups) {
+      let after = successor;
+      for (let i = nodes.length - 1; i >= 0; i--) {
+        const node = nodes[i];
+        if (node.parentNode !== this.list || node.nextSibling !== after) this.list.insertBefore(node, after);
+        after = node;
+      }
+    }
   }
 
   rebuild(position = null) {
@@ -218,9 +306,142 @@ export class TranscriptView {
       fragment.appendChild(node);
     }
     this.list.appendChild(fragment);
+    this.renderDrafts();
     this.renderQueue();
     if (position) this.restoreScroll(position.wasAtBottom, position.scrollTop);
     else this.scrollToBottom();
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* drafts                                                           */
+  /* ---------------------------------------------------------------- */
+
+  /** Replace every draft node with the store's current drafts. */
+  renderDrafts() {
+    this.cancelDraftFrame();
+    for (const view of this.draftViews.values()) view.node.remove();
+    this.draftViews.clear();
+    const fragment = document.createDocumentFragment();
+    for (const draft of this.store.session(this.sessionId).drafts.values()) {
+      const view = this.buildDraft(draft);
+      this.draftViews.set(draft.streamId, view);
+      fragment.appendChild(view.node);
+    }
+    this.list.appendChild(fragment);
+    this.placeDrafts();
+  }
+
+  scheduleDraftFrame() {
+    if (this.draftFrame !== null) return;
+    this.draftFrame = nextFrame(() => {
+      this.draftFrame = null;
+      this.flushDrafts();
+    });
+  }
+
+  cancelDraftFrame() {
+    if (this.draftFrame !== null) cancelFrame(this.draftFrame);
+    this.draftFrame = null;
+    this.dirtyDrafts.clear();
+  }
+
+  /** Draw the drafts that changed since the last frame, keeping the reader's place. */
+  flushDrafts() {
+    if (!this.dirtyDrafts.size) return;
+    const wasAtBottom = this.followBottom;
+    const previousScrollTop = this.list.scrollTop;
+    const { drafts } = this.store.session(this.sessionId);
+    for (const streamId of this.dirtyDrafts) {
+      const view = this.draftViews.get(streamId);
+      const draft = drafts.get(streamId);
+      if (view && draft) view.update(draft);
+    }
+    this.dirtyDrafts.clear();
+    this.restoreScroll(wasAtBottom, previousScrollTop);
+  }
+
+  /**
+   * A draft's node plus an `update` that redraws it from newer draft state.
+   * Read-only by construction: nothing here can answer, approve or run.
+   */
+  buildDraft(draft) {
+    const view = draft.kind === 'text' ? this.buildTextDraft(draft) : this.buildToolDraft(draft);
+    view.node.classList.add('draft');
+    view.node.dataset.streamId = draft.streamId;
+    return view;
+  }
+
+  buildTextDraft(draft, reason = null) {
+    const node = el('div', 'row msg-agent');
+    node.appendChild(draftTag(reason));
+    const body = el('div', 'md');
+    // The completed-output path: the same sanitizing renderer, which treats
+    // an unclosed fence or link as literal text until it closes.
+    const update = (next) => { body.innerHTML = toHtml(next.text, this.handlers.serverBase); };
+    update(draft);
+    node.appendChild(body);
+    return { node, update };
+  }
+
+  buildToolDraft(draft, reason = null) {
+    const card = el('div', 'row card open');
+    const head = el('div', 'card-head');
+    const label = el('span', 'tool');
+    const summary = el('span', 'summary');
+    head.append(label, summary, draftTag(reason));
+    card.appendChild(head);
+
+    const body = el('div', 'card-body');
+    const wrap = el('div', 'action-body');
+    const raw = el('details', 'raw-toggle');
+    raw.appendChild(el('summary', null, reason ? 'arguments when interrupted' : 'arguments so far'));
+    const rawText = el('pre');
+    raw.appendChild(rawText);
+    body.appendChild(wrap);
+    body.appendChild(raw);
+    card.appendChild(body);
+
+    let shown = { label: null, summaryKey: null, body: null, element: null };
+    let latest = draft;
+    // Only an open disclosure pays for re-serializing the arguments.
+    const drawRaw = () => { rawText.textContent = prettyJson(latest.argumentsPreview); };
+    raw.addEventListener('toggle', () => { if (raw.open) drawRaw(); });
+
+    const update = (next) => {
+      latest = next;
+      const preview = draftPreview(next);
+      if (preview.label !== shown.label) label.textContent = preview.label;
+      const summaryKey = `${preview.sessionTool}|${preview.target}|${preview.summary}`;
+      if (summaryKey !== shown.summaryKey) {
+        summary.replaceChildren();
+        if (preview.sessionTool === 'message_session') {
+          // A target is named once its ID has arrived; until then it is being
+          // composed, not invalid. Final validation judges it.
+          summary.append('→ ', preview.target
+            ? this.sessionRef(preview.target, 'target')
+            : el('span', 'ref-missing', reason ? 'no target yet' : 'composing…'));
+        } else if (preview.sessionTool === 'read_session' && preview.target) {
+          summary.appendChild(this.sessionRef(preview.target, 'target'));
+        } else {
+          summary.textContent = preview.summary;
+        }
+      }
+      shown = { ...shown, label: preview.label, summaryKey };
+      shown = { ...shown, ...drawGrowing(wrap, shown, preview.body, preview.sessionTool !== null) };
+      if (raw.open) drawRaw();
+    };
+    update(draft);
+    return { node: card, update };
+  }
+
+  /** A persisted interrupted draft: visible, labelled, and never actionable. */
+  buildInterrupted(row) {
+    if (!row.draft) return fallbackCard(row);
+    const view = row.draft.kind === 'text'
+      ? this.buildTextDraft(row.draft, row.reason)
+      : this.buildToolDraft(row.draft, row.reason);
+    view.node.classList.add('interrupted');
+    return view.node;
   }
 
   /* ---------------------------------------------------------------- */
@@ -421,6 +642,7 @@ export class TranscriptView {
       case 'question': node = this.buildQuestion(row); break;
       case 'bash': node = this.buildBash(row); break;
       case 'error': node = this.buildError(row); break;
+      case 'interrupted': node = this.buildInterrupted(row); break;
       default: node = el('div', 'row');
     }
     if (row.kind === 'user') this.images.append(node.querySelector('.msg-user') || node, row.images);
@@ -764,12 +986,42 @@ function rawToggle(action) {
   return details;
 }
 
+/** The state pill on a draft, or on an entry whose generation was interrupted. */
+function draftTag(reason) {
+  return reason
+    ? el('span', 'draft-tag interrupted-tag', `INTERRUPTED · ${INTERRUPT_LABELS[reason] ?? reason}`)
+    : el('span', 'draft-tag', 'GENERATING');
+}
+
+/**
+ * Show a growing plain-text body. Text that only grew gets its new tail
+ * appended, so a selection inside it survives and a long body is not
+ * re-laid-out from scratch every frame.
+ */
+function drawGrowing(wrap, shown, text, message) {
+  if (text === shown.body) return {};
+  if (text === null) {
+    shown.element?.remove();
+    return { body: null, element: null };
+  }
+  if (shown.element && shown.body !== null && text.startsWith(shown.body)) {
+    shown.element.appendChild(document.createTextNode(text.slice(shown.body.length)));
+    return { body: text };
+  }
+  const element = message ? el('div', 'peer-text session-message', text) : el('pre', 'tool-block', text);
+  if (shown.element) shown.element.replaceWith(element);
+  else wrap.appendChild(element);
+  return { body: text, element };
+}
+
+const FALLBACK_KINDS = { approval: 'APPROVAL', interrupted: 'INTERRUPTED' };
+
 function fallbackCard(row) {
   const card = el('div', 'row card protocol-fallback open');
   const head = el('div', 'card-head');
   head.appendChild(el('span', 'tool', row.legacy
     ? 'LEGACY EVENT FROM AN OLDER SERVER VERSION'
-    : `MALFORMED ${row.kind === 'approval' ? 'APPROVAL' : 'TOOL'} EVENT`));
+    : `MALFORMED ${FALLBACK_KINDS[row.kind] ?? 'TOOL'} EVENT`));
   card.appendChild(head);
   const body = el('div', 'card-body');
   body.appendChild(rawBlock(row.rawEvent));
