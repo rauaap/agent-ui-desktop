@@ -95,8 +95,8 @@ CSP intentionally allows only same-origin connections; the supported path is
   sandboxed turns for Pi and Claude, including parent-project worktree sessions,
   not running turns. There is no per-session list or WebSocket settings event.
 - **Agent picker** — the new-session dialog offers the agents `GET /agents`
-  says this server can run. Settings lets this browser remember which one to
-  preselect; without that preference, the server’s default is used. Nothing is
+  says this server can run. Settings saves the preferred agent on the server;
+  choosing “Server default” clears it to null and uses the catalog default. Nothing is
   listed here, so an agent added on the server shows up on the next refresh.
 - **Model picker** — beside the agent, the new-session dialog offers that
   agent's models from its `GET /agents` row, preselecting the first; switching agent
@@ -120,6 +120,19 @@ CSP intentionally allows only same-origin connections; the supported path is
   `%b` the branch verbatim. The default `%P/%N-%B` puts `/projects/app` on
   branch `fix-login` at `/projects/app-fix-login`. The seeded path follows the
   branch field until you edit it, and a Reset button leashes it again.
+  The template is shared server state: settings and worktree creation fetch
+  `GET /settings` afresh, and Save uses `PATCH /settings`. Expansion remains
+  local and `POST /worktrees` still receives an absolute path. Load/save errors
+  are shown without falling back to a default or an old browser preference;
+  unrelated browser preferences remain local.
+- **Creation defaults** — Settings also stores `default_working_directory`
+  (default `/projects/`) and `default_agent` (default `null`) on the server.
+  New-project and new-session dialogs fetch settings afresh to seed their
+  directory and agent respectively. Settings saves only changed fields via
+  `PATCH /settings`; explicit `default_agent: null` restores the catalog default.
+  No old browser directory/agent preferences are read or migrated, and creating
+  a project does not change the saved default directory. Connection credentials
+  and device/browser preferences remain local.
 - **Live project/session list** — the sidebar polls projects, sessions, worktrees,
   and the cached agent catalog every three seconds while visible, including changes
   from other clients. Selecting a session opens the one full transcript WebSocket;
@@ -440,7 +453,7 @@ the default the server would have applied anyway. `agents.js` normalizes the
 rows — dropping any that name no agent, falling back to the id for a missing
 label — and everything above it reads that list: the picker's options, its
 preselection, and the agent named in a session's tooltip. A preferred agent can
-be saved in Settings for this browser. It wins while that id remains in the
+be saved in server Settings. It wins while that id remains in the
 server’s list; if an upgrade removes it, selection falls back safely to the
 server default.
 

@@ -84,7 +84,8 @@ try {
   notifications.textContent = 'Desktop notifications: Off';
   let notificationClicks = 0;
   notifications.addEventListener('click', () => { notificationClicks++; });
-  const notificationSettings = appSettingsDialog(null, '/project', [], null, notifications);
+  const defaults = { worktree_path_template: '%P/%N-%B', default_working_directory: '/projects/', default_agent: null };
+  const notificationSettings = appSettingsDialog(defaults, '/project', [], notifications);
   assert.ok(descendants(dialog()).includes(notifications));
   await button('Desktop notifications: Off').emit('click');
   assert.equal(notificationClicks, 1);
@@ -92,7 +93,7 @@ try {
   await button('Cancel').emit('click');
   assert.equal(await notificationSettings, null);
 
-  const settings = appSettingsDialog(null, '/project');
+  const settings = appSettingsDialog(defaults, '/project');
   await button('Server shared assets…').emit('click');
   assert.equal((await settings).action, 'shared-assets');
   const project = projectSettingsDialog({ id: '42', name: 'Project', path: '/project' }, []);

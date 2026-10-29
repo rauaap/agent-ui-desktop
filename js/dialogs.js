@@ -228,64 +228,20 @@ function seedFrom(source, target, derive) {
 }
 
 /* ------------------------------------------------------------------ */
-/* projects                                                           */
-/* ------------------------------------------------------------------ */
-
-const DEFAULT_DIR_KEY = 'agent-ui.default-dir';
-
-export const defaultDir = () => {
-  try {
-    return localStorage.getItem(DEFAULT_DIR_KEY) || '/projects/';
-  } catch {
-    return '/projects/';
-  }
-};
-
-export const setDefaultDir = (dir) => {
-  try {
-    localStorage.setItem(DEFAULT_DIR_KEY, dir);
-  } catch {
-    /* nothing to do */
-  }
-};
-
-/* ------------------------------------------------------------------ */
 /* settings                                                           */
 /* ------------------------------------------------------------------ */
-
-const TEMPLATE_KEY = 'agent-ui.worktree-template';
-
-/** The path template new worktrees are seeded from. See `js/worktree.js`. */
-export const worktreeTemplate = () => {
-  try {
-    return localStorage.getItem(TEMPLATE_KEY) || DEFAULT_TEMPLATE;
-  } catch {
-    return DEFAULT_TEMPLATE;
-  }
-};
-
-export const setWorktreeTemplate = (template) => {
-  try {
-    localStorage.setItem(TEMPLATE_KEY, template);
-  } catch {
-    /* the default keeps working, it just won't be remembered */
-  }
-};
 
 /** The branch the settings example expands against — a stand-in, not real. */
 const SAMPLE_BRANCH = 'feature/fix-login';
 
 /**
- * Browser preferences, plus an entry point to server sandbox settings.
- * Both preference values are local to this browser: the server receives
- * the chosen agent when a session is created, and receives an already-expanded
- * absolute worktree path.
- *
- * Resolves `{template, agent}`, or null. `agent` is undefined when the server
- * supplied no agent list, so opening settings offline cannot erase a choice.
+ * Browser preferences and server-owned worktree template settings.
+ * Saves through the supplied callback; rejected drafts remain editable.
+ * Resolves the selected navigation action, or null on cancellation.
  */
-export function appSettingsDialog(template, sampleProject, agents = [], agent = null, notifications = null) {
+export function appSettingsDialog(settings, sampleProject, agents = [], notifications = null, save = async () => {}) {
   let input;
+  let directoryInput;
   let agentSelect;
   let action;
   const project = sampleProject || '/projects/app';
@@ -312,16 +268,20 @@ export function appSettingsDialog(template, sampleProject, agents = [], agent = 
         body.appendChild(el('div', 'dlg-note',
           'Notifications for the selected session while the app is hidden. This preference applies only to this browser and changes immediately.'));
       }
+      body.appendChild(el('div', 'dlg-label', 'Server preferences'));
       if (agents.length) {
         const wrap = el('div', 'field');
         wrap.appendChild(el('label', null, 'Default agent'));
         agentSelect = el('select');
+        const serverDefault = el('option', null, 'Server default');
+        serverDefault.value = '';
+        agentSelect.appendChild(serverDefault);
         for (const offered of agents) {
           const option = el('option', null, offered.name);
           option.value = offered.id;
           agentSelect.appendChild(option);
         }
-        agentSelect.value = preferredAgent(agents, agent);
+        agentSelect.value = settings.default_agent ?? '';
         wrap.appendChild(agentSelect);
         wrap.appendChild(el('div', 'dlg-note',
           'Preselected whenever you create a session. You can still choose another agent there.'));
@@ -331,7 +291,11 @@ export function appSettingsDialog(template, sampleProject, agents = [], agent = 
           'Default agent is unavailable until the server provides its agent list.'));
       }
 
-      input = field(body, 'Worktree path template', template || DEFAULT_TEMPLATE, {
+      directoryInput = field(body, 'Default working directory', settings.default_working_directory, {
+        mono: true,
+        hint: 'Seeds the directory for new projects. Saved on the server for all clients.',
+      });
+      input = field(body, 'Worktree path template', settings.worktree_path_template, {
         mono: true,
         hint: '%P the project’s parent directory · %N the project directory’s name · '
           + '%B the branch with slashes turned to dashes · %b the branch verbatim.',
@@ -340,7 +304,7 @@ export function appSettingsDialog(template, sampleProject, agents = [], agent = 
       const example = el('div', 'dlg-preview');
       body.appendChild(example);
       const paint = () => {
-        example.textContent = `Example: ${expand(input.value || DEFAULT_TEMPLATE, project, SAMPLE_BRANCH)}`;
+        example.textContent = `Example: ${expand(input.value, project, SAMPLE_BRANCH)}`;
       };
       input.addEventListener('input', paint);
       paint();
@@ -348,16 +312,24 @@ export function appSettingsDialog(template, sampleProject, agents = [], agent = 
       body.appendChild(el('div', 'dlg-note',
         `Expanded against ${project} and the branch ${SAMPLE_BRANCH}. `
         + 'This only seeds the directory field when you create a worktree — it is always '
-        + 'editable there, and existing worktrees are unaffected.'));
+        + 'editable there, and existing worktrees are unaffected. Saved on the server for all clients.'));
       body.appendChild(el('div', 'dlg-note',
         '%B rather than %b is the one to reach for: slashes are legal in branch names, and '
         + `%P/%N-%b would put this one two directories down rather than beside the project.`));
     },
-    collect: () => ({
-      action,
-      template: input.value.trim() || DEFAULT_TEMPLATE,
-      agent: agentSelect ? agentSelect.value : undefined,
-    }),
+    collect: async () => {
+      if (!action) {
+        const values = {
+          worktree_path_template: input.value.trim(),
+          default_working_directory: directoryInput.value.trim(),
+          ...(agentSelect ? { default_agent: agentSelect.value || null } : {}),
+        };
+        const changes = Object.fromEntries(Object.entries(values)
+          .filter(([key, value]) => value !== settings[key]));
+        if (Object.keys(changes).length) await save(changes);
+      }
+      return { action };
+    },
   });
 }
 
@@ -592,7 +564,7 @@ export function sandboxNetworkDialog(entries, save, projectName = null, defaults
 }
 
 /** New project: `{path, name}`, or null. */
-export function newProjectDialog() {
+export function newProjectDialog(defaultWorkingDirectory) {
   let nameInput;
   let pathInput;
   // The path tracks the name until the user edits it by hand, after which the
@@ -604,11 +576,11 @@ export function newProjectDialog() {
     confirm: 'Create',
     body: (body) => {
       nameInput = field(body, 'Name', '');
-      pathInput = field(body, 'Directory', defaultDir(), {
+      pathInput = field(body, 'Directory', defaultWorkingDirectory, {
         mono: true,
         hint: 'Absolute path on the server. Created if it does not exist.',
       });
-      const base = defaultDir().replace(/\/*$/, '/');
+      const base = defaultWorkingDirectory.replace(/\/*$/, '/');
       nameInput.addEventListener('input', () => {
         if (linked) pathInput.value = base + nameInput.value.trim();
       });
@@ -619,9 +591,6 @@ export function newProjectDialog() {
       const path = pathInput.value.trim();
       if (!name) throw new Error('Give the project a name');
       if (!path.startsWith('/')) throw new Error('The directory must be an absolute path');
-      // Remember the parent directory so the next project pre-fills sensibly.
-      const parent = path.slice(0, path.lastIndexOf('/') + 1);
-      if (parent) setDefaultDir(parent);
       return { path, name };
     },
   });
@@ -1174,7 +1143,7 @@ const NEW_WORKTREE = '\0new';
  *   onSubmit?: (spec: object) => Promise<object>,
  * }} handlers
  */
-export function newSessionDialog(project, worktrees = [], agents = [], handlers = {}) {
+export function newSessionDialog(project, worktrees = [], agents = [], handlers = {}, defaultAgent = null) {
   let nameInput;
   let agentSelect = null;
   let models = null;
@@ -1206,9 +1175,8 @@ export function newSessionDialog(project, worktrees = [], agents = [], handlers 
           option.value = agent.id;
           agentSelect.appendChild(option);
         }
-        // Prefer this browser's setting; if it names an agent the server no
-        // longer offers, preferredAgent falls safely back to the server default.
-        agentSelect.value = preferredAgent(agents);
+        // Null selects the catalog default; no browser preference is read.
+        agentSelect.value = preferredAgent(agents, defaultAgent);
         wrap.appendChild(agentSelect);
         body.appendChild(wrap);
         models = modelPicker(body, agentSelect, agents, gate);

@@ -1,6 +1,6 @@
 /** Minimal DOM smoke test: node test/sandbox-network-dialog-tests.js */
 import assert from 'node:assert/strict';
-import { sandboxNetworkDialog, appSettingsDialog, projectSettingsDialog } from '../js/dialogs.js';
+import { sandboxNetworkDialog, appSettingsDialog, projectSettingsDialog, newProjectDialog } from '../js/dialogs.js';
 
 class Node {
   constructor(tag) {
@@ -95,7 +95,49 @@ try {
   await button('Sandbox network…').emit('click');
   assert.equal((await projectSettings).action, 'sandbox-network');
 
-  const settings = appSettingsDialog(null, '/project');
+  const drafts = [];
+  let saveError = true;
+  const defaults = { worktree_path_template: '%P/%N-%B', default_working_directory: '/projects/', default_agent: 'pi' };
+  const templateSettings = appSettingsDialog(defaults, '/project', [], null, async (changes) => {
+    drafts.push(changes);
+    if (saveError) throw new Error('Settings save failed');
+  });
+  inputs()[1].value = '  /trees/%b  ';
+  await button('Save').emit('click');
+  assert.deepEqual(drafts, [{ worktree_path_template: '/trees/%b' }]);
+  assert.equal(inputs()[1].value, '  /trees/%b  ');
+  assert.equal(descendants(dialog()).find((node) => node.className === 'dlg-error').textContent, 'Settings save failed');
+  saveError = false;
+  inputs()[1].value = '';
+  await button('Save').emit('click');
+  await templateSettings;
+  assert.deepEqual(drafts.at(-1), { worktree_path_template: '' }); // No silent default substitution.
+
+  const agents = [{ id: 'pi', name: 'Pi' }, { id: 'claude-code', name: 'Claude', default: true }];
+  const preferences = appSettingsDialog(defaults, '/project', agents, null, async (changes) => drafts.push(changes));
+  const select = descendants(dialog()).find((node) => node.tagName === 'SELECT');
+  assert.equal(select.value, 'pi');
+  select.value = '';
+  inputs()[0].value = '  /shared/projects/  ';
+  await button('Save').emit('click');
+  await preferences;
+  assert.deepEqual(drafts.at(-1), { default_working_directory: '/shared/projects/', default_agent: null });
+
+  const unchanged = appSettingsDialog(defaults, '/project', agents, null, () => { throw new Error('No-op must not PATCH'); });
+  await button('Save').emit('click');
+  await unchanged;
+
+  const project = newProjectDialog('/server/projects/');
+  assert.equal(inputs()[1].value, '/server/projects/');
+  inputs()[0].value = 'example';
+  await inputs()[0].emit('input');
+  assert.equal(inputs()[1].value, '/server/projects/example');
+  await button('Create').emit('click');
+  assert.deepEqual(await project, { name: 'example', path: '/server/projects/example' });
+
+  const settings = appSettingsDialog(defaults, '/project', [], null, () => {
+    throw new Error('Navigation must not save settings');
+  });
   await button('Server sandbox network…').emit('click');
   assert.equal((await settings).action, 'sandbox-network');
   console.log('Sandbox network dialog: load/add/remove/clear/save, normalized response, error retention, cancel, settings entry passed');

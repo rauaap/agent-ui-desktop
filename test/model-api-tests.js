@@ -94,8 +94,8 @@ const agents = [
   { id: 'pi', name: 'Pi', default: false, models: [], models_error: 'Model discovery failed: boom' },
 ];
 const project = { name: 'P', path: '/p', is_git_repo: false };
-const open = (handlers, agentList = agents) => {
-  const result = newSessionDialog(project, [], agentList, handlers);
+const open = (handlers, agentList = agents, defaultAgent = null) => {
+  const result = newSessionDialog(project, [], agentList, handlers, defaultAgent);
   const dialog = document.body.children.at(-1);
   const [agentSelect, modelSelect, reasoningSelect] = dialog.all.filter((node) => node.tag === 'select');
   const note = modelSelect?.parent.children.find((node) => node.className.startsWith('dlg-note'));
@@ -111,6 +111,16 @@ const open = (handlers, agentList = agents) => {
     pickModel, levels, reasoningShown,
   };
 };
+
+// Server-owned preference overrides the catalog default; null uses the catalog.
+const preferred = open({}, agents, 'pi');
+assert.equal(preferred.agentSelect.value, 'pi');
+preferred.dialog.all.find((node) => node.tag === 'button' && node.textContent === 'Cancel').dispatch('click');
+await preferred.result;
+const catalogDefault = open({}, agents, null);
+assert.equal(catalogDefault.agentSelect.value, 'claude-code');
+catalogDefault.dialog.all.find((node) => node.tag === 'button' && node.textContent === 'Cancel').dispatch('click');
+await catalogDefault.result;
 
 // The selected agent's catalog preselects its first model.
 const submitted = [];

@@ -111,6 +111,10 @@ export const getScrollback = (sessionId, before) => request(
 /* projects                                                           */
 /* ------------------------------------------------------------------ */
 
+/** Server-owned preferences. Call afresh when opening settings or worktree creation. */
+export const getSettings = () => request('GET', '/settings');
+export const patchSettings = (changes) => request('PATCH', '/settings', changes);
+
 /** Server-wide exact IPv4 + TCP port exceptions; PATCH replaces the whole list. */
 export const getSandboxNetwork = () => request('GET', '/sandbox-network');
 

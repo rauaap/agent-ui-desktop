@@ -11,7 +11,6 @@ import * as api from './api.js';
 import { directoryExists } from './directory-existence.js';
 import { fetchCatalogSnapshot } from './catalog-snapshot.js';
 import { authBlocked, showTokenPrompt } from './auth.js';
-import { agentPreference, setAgentPreference } from './agents.js';
 import { modelLabel, reasoningLevels } from './models.js';
 import { copyText } from './clipboard.js';
 import { SessionDirectory } from './inter-agent.js';
@@ -36,8 +35,6 @@ import {
   projectSettingsDialog,
   sessionSettingsDialog,
   usageDialog,
-  setWorktreeTemplate,
-  worktreeTemplate,
 } from './dialogs.js';
 import { baseOf, normalize } from './worktree.js';
 
@@ -335,9 +332,10 @@ const sampleProject = () => [...projects]
 /* ------------------------------------------------------------------ */
 
 async function createProject() {
-  const spec = await newProjectDialog();
-  if (!spec) return;
   try {
+    const settings = await api.getSettings();
+    const spec = await newProjectDialog(settings.default_working_directory);
+    if (!spec) return;
     await api.createProject(spec.path, spec.name);
     await refresh();
   } catch (error) {
@@ -457,11 +455,18 @@ function reportWorktreesLeft(errors) {
  * words about the branch name lands under the fields the user can fix. Nothing
  * is created on disk when it fails.
  */
-function createWorktreeFor(project, branchSeed) {
+async function createWorktreeFor(project, branchSeed) {
+  let settings;
+  try {
+    settings = await api.getSettings();
+  } catch (error) {
+    fail(error);
+    return null;
+  }
   return createWorktreeDialog(
     project,
     worktreesFor(project),
-    worktreeTemplate(),
+    settings.worktree_path_template,
     branchSeed,
     async (spec) => {
       try {
@@ -575,6 +580,13 @@ function reportWorktreeKept(worktree, detail) {
 }
 
 async function createSession(project) {
+  let settings;
+  try {
+    settings = await api.getSettings();
+  } catch (error) {
+    fail(error);
+    return;
+  }
   const session = await newSessionDialog(project, worktreesFor(project), agents, {
     // Opened from inside the dialog, on top of it: the picker adds whatever
     // comes back and selects it, so the session being created is not lost.
@@ -594,7 +606,7 @@ async function createSession(project) {
         throw error;
       }
     },
-  });
+  }, settings.default_agent);
   if (!session) return;
   try {
     await refresh();
@@ -754,24 +766,26 @@ document.getElementById('new-project-btn').addEventListener('click', createProje
 document.getElementById('usage-btn').addEventListener('click', () => usageDialog(api.getUsage));
 
 /**
- * Client settings. The preferred agent and worktree path template live in this
- * browser; the resolved values are sent to the server when resources are made.
+ * Fetch server settings on every opening; unrelated browser preferences stay local.
  */
 async function openAppSettings() {
-  const result = await appSettingsDialog(
-    worktreeTemplate(),
-    sampleProject()?.path,
-    agents,
-    agentPreference(),
-    bell,
-  );
-  if (!result) return;
-  setWorktreeTemplate(result.template);
-  if (result.agent !== undefined) setAgentPreference(result.agent);
-  if (result.action === 'shared-assets') await openSharedAssets();
-  if (result.action === 'sandbox-paths') await openSandboxPaths();
-  if (result.action === 'sandbox-network') await openSandboxNetwork();
-  if (result.action === 'server-token') showTokenPrompt(false, true);
+  try {
+    const settings = await api.getSettings();
+    const result = await appSettingsDialog(
+      settings,
+      sampleProject()?.path,
+      agents,
+      bell,
+      api.patchSettings,
+    );
+    if (!result) return;
+    if (result.action === 'shared-assets') await openSharedAssets();
+    if (result.action === 'sandbox-paths') await openSandboxPaths();
+    if (result.action === 'sandbox-network') await openSandboxNetwork();
+    if (result.action === 'server-token') showTokenPrompt(false, true);
+  } catch (error) {
+    fail(error);
+  }
 }
 
 async function openSharedAssets(project = null) {
